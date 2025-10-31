@@ -22,7 +22,10 @@ while true; do
         1)
             echo "🐍 Running Python script..."
             # Ctrl+C داخل این اسکریپت باعث برگرداندن به منو میشه
-            python3 <(https://raw.githubusercontent.com/omid-j-d/junk-code/refs/heads/main/adblock.py) || true
+            PY_FILE=$(mktemp /tmp/nsfwblock.py)
+            curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/refs/heads/main/nsfwblock.py -o "$PY_FILE"
+            python3 "$PY_FILE" || true
+            rm -f "$PY_FILE"
             ;;
         2)
             echo "🚀 Running Bash script..."
