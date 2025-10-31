@@ -39,7 +39,12 @@ except Exception:
 DEFAULT_SOURCES = [
     # Example sources (replace or extend these):
     "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
-    "https://raw.githubusercontent.com/blocklistproject/Lists/master/porn.txt",
+    "https://big.oisd.nl",
+    "https://blocklistproject.github.io/Lists/ads.txt",
+    "https://blocklistproject.github.io/Lists/malware.txt",
+    "https://blocklistproject.github.io/Lists/ransomware.txt",
+    "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/popupads.txt",
+    "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.mini.txt"
     # Add more URLs below:
     # "https://example.com/list1.txt",
     # "https://another-source.net/domains.html",
