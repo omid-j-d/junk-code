@@ -149,7 +149,7 @@ def write_outputs(domains: Set[str], prefix="porn_sites"):
     domains_sorted = sorted(domains)
     with open(f"{prefix}_domains.txt", "w", encoding="utf-8") as f1, \
          open(f"{prefix}_hosts_block.txt", "w", encoding="utf-8") as f2, \
-         open(f"{prefix}_adblock.txt", "w", encoding="utf-8") as f3:
+         open(f"{prefix}_nsfw.txt", "w", encoding="utf-8") as f3:
         for d in domains_sorted:
             f1.write(d + "\n")
             f2.write(f"127.0.0.1 {d}\n")
