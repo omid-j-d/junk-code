@@ -60,6 +60,20 @@ fi
 rm -f "$XRAY_DIR/$ZIP_FILE"
 echo "🧹 Cleaned up installation files."
 
+# ===============================
+# بخش اضافه‌شده برای geoip.dat و geosite.dat
+# ===============================
+GEOIP_URL="https://raw.githubusercontent.com/Chocolate4U/Iran-v2ray-rules/release/geoip.dat"
+GEOSITE_URL="https://raw.githubusercontent.com/Chocolate4U/Iran-v2ray-rules/release/geosite.dat"
+
+echo "🗂 Removing old geoip.dat and geosite.dat..."
+rm -f "$XRAY_DIR/geoip.dat" "$XRAY_DIR/geosite.dat"
+
+echo "⬇️ Downloading new geoip.dat and geosite.dat..."
+curl -L -o "$XRAY_DIR/geoip.dat" "$GEOIP_URL"
+curl -L -o "$XRAY_DIR/geosite.dat" "$GEOSITE_URL"
+echo "✅ geoip.dat and geosite.dat updated."
+
 echo ""
 echo "✅ Xray v${VERSION} updated successfully!"
 echo "📂 Path: $XRAY_DIR/$CORE_FILE"
