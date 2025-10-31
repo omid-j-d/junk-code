@@ -29,7 +29,7 @@ while true; do
             ;;
         2)
             echo "🚀 Running Bash script..."
-            bash <(curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/main/setup-fastfetch.sh) || true
+            bash <(curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/refs/heads/main/ssl.sh) || true
             ;;
         3)
             echo "👋 Goodbye!"
