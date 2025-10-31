@@ -148,7 +148,7 @@ def collect_from_sources(sources: List[str]) -> Set[str]:
         all_domains.update(domains)
     return all_domains
 
-def write_outputs(domains: Set[str], prefix="porn_sites"):
+def write_outputs(domains: Set[str], prefix="adblock"):
     domains_sorted = sorted(domains)
     with open(f"{prefix}_domains.txt", "w", encoding="utf-8") as f1, \
          open(f"{prefix}_hosts_block.txt", "w", encoding="utf-8") as f2, \
