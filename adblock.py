@@ -44,7 +44,8 @@ DEFAULT_SOURCES = [
     "https://blocklistproject.github.io/Lists/malware.txt",
     "https://blocklistproject.github.io/Lists/ransomware.txt",
     "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/popupads.txt",
-    "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.mini.txt"
+    "https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/adblock/pro.mini.txt",
+    "https://github.com/AdguardTeam/HostlistsRegistry/blob/main/assets/filter_19.txt",
     # Add more URLs below:
     # "https://example.com/list1.txt",
     # "https://another-source.net/domains.html",
