@@ -63,7 +63,7 @@ services:
     restart: always
     environment:
       - NODE_PORT=$NODE_PORT
-      - SECRET_KEY=$SECRET_KEY
+      - SECRET_KEY="$SECRET_KEY"
     volumes:
       - './geosite.dat:/usr/local/share/xray/geo-zapret.dat'
       - './geoip.dat:/usr/local/share/xray/ip-zapret.dat'
