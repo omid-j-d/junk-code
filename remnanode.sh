@@ -12,7 +12,7 @@ RESET="\e[0m"
 
 echo -e "${CYAN}🧰 Docker Node Installer${RESET}"
 
-# اسم node
+# 1️⃣ نام node
 read -p "Enter a name for your node container: " NODE_NAME
 if [ -z "$NODE_NAME" ]; then
     echo -e "${RED}❌ Name cannot be empty${RESET}"
@@ -21,7 +21,7 @@ fi
 
 NODE_DIR="$BASE_DIR/$NODE_NAME"
 
-# بررسی وجود فولدر
+# 2️⃣ بررسی وجود پوشه
 if [ -d "$NODE_DIR" ]; then
     read -p "⚠️ Folder $NODE_DIR already exists. Delete it? (y/N): " DELETE
     if [[ "$DELETE" =~ ^[Yy]$ ]]; then
@@ -36,13 +36,13 @@ fi
 
 cd "$NODE_DIR"
 
-# پورت و SECRET_KEY
+# 3️⃣ پورت و SECRET_KEY
 read -p "Enter NODE_PORT: " NODE_PORT
 if [ -z "$NODE_PORT" ]; then NODE_PORT=12345; fi
 read -p "Enter SECRET_KEY: " SECRET_KEY
 if [ -z "$SECRET_KEY" ]; then SECRET_KEY=""; fi
 
-# دانلود geoip.dat و geosite.dat
+# 4️⃣ دانلود geoip.dat و geosite.dat
 GEOIP_URL="https://raw.githubusercontent.com/Chocolate4U/Iran-v2ray-rules/release/geoip.dat"
 GEOSITE_URL="https://raw.githubusercontent.com/Chocolate4U/Iran-v2ray-rules/release/geosite.dat"
 
@@ -50,7 +50,7 @@ echo "⬇️ Downloading geoip.dat and geosite.dat..."
 curl -L -o "$NODE_DIR/geoip.dat" "$GEOIP_URL"
 curl -L -o "$NODE_DIR/geosite.dat" "$GEOSITE_URL"
 
-# ساخت docker-compose.yml
+# 5️⃣ ساخت docker-compose.yml
 cat > "$NODE_DIR/docker-compose.yml" <<EOF
 version: "3.8"
 
@@ -69,11 +69,17 @@ services:
       - './geoip.dat:/usr/local/share/xray/ip-zapret.dat'
 EOF
 
-# ساخت wrapper command برای start/stop/restart/update
+# 6️⃣ اجرای خودکار کانتینر
+echo "🚀 Starting container..."
+docker compose -f "$NODE_DIR/docker-compose.yml" up -d
+echo -e "${GREEN}✅ Container started${RESET}"
+
+# 7️⃣ ساخت wrapper command
 WRAPPER="/usr/local/bin/$NODE_NAME"
 cat > "$WRAPPER" <<EOF
 #!/bin/bash
 NODE_DIR="$NODE_DIR"
+DOCKER_COMPOSE=\$(command -v docker-compose || echo "docker compose")
 
 if [ -z "\$1" ]; then
   echo "Usage: $NODE_NAME [start|stop|restart|update]"
@@ -82,17 +88,17 @@ fi
 
 case "\$1" in
   start)
-    docker-compose -f "\$NODE_DIR/docker-compose.yml" up -d
+    \$DOCKER_COMPOSE -f "\$NODE_DIR/docker-compose.yml" up -d
     ;;
   stop)
-    docker-compose -f "\$NODE_DIR/docker-compose.yml" down
+    \$DOCKER_COMPOSE -f "\$NODE_DIR/docker-compose.yml" down
     ;;
   restart)
-    docker-compose -f "\$NODE_DIR/docker-compose.yml" restart
+    \$DOCKER_COMPOSE -f "\$NODE_DIR/docker-compose.yml" restart
     ;;
   update)
-    docker-compose -f "\$NODE_DIR/docker-compose.yml" pull
-    docker-compose -f "\$NODE_DIR/docker-compose.yml" up -d
+    \$DOCKER_COMPOSE -f "\$NODE_DIR/docker-compose.yml" pull
+    \$DOCKER_COMPOSE -f "\$NODE_DIR/docker-compose.yml" up -d
     ;;
   *)
     echo "Invalid command. Use start|stop|restart|update"
@@ -101,5 +107,5 @@ esac
 EOF
 
 chmod +x "$WRAPPER"
-echo -e "${GREEN}✅ Node $NODE_NAME installed and wrapper command created as $NODE_NAME${RESET}"
+echo -e "${GREEN}✅ Wrapper command created: $NODE_NAME${RESET}"
 echo "Use '$NODE_NAME start|stop|restart|update' to manage your container"
