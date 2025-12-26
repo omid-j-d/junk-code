@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-BASE_DIR="/opt"
+BASE_DIR="/opt/remnanode"   
 
 # 🎨 Colors
 RED="\e[31m"
