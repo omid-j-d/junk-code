@@ -30,10 +30,9 @@ show_menu() {
     echo -e "${RESET}"
 
     # پیدا کردن تمام اسکریپت های .sh و .py کنار run.sh
-    mapfile -t SCRIPTS < <(
-        find "$BASE_DIR" -maxdepth 1 -type f \( -name "*.sh" -o -name "*.py" \) ! -name "$(basename "$0")" -print0 \
-        | xargs -0 -n1 realpath
-    )
+   mapfile -t SCRIPTS < <(
+    find "$BASE_DIR" -maxdepth 1 -type f \( -name "*.sh" -o -name "*.py" \) ! -name "$(basename "$0")" | sort
+)
 
     i=1
     for script in "${SCRIPTS[@]}"; do
