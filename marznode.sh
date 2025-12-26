@@ -7,6 +7,17 @@ if [ ! -d "$MARZ_PATH" ]; then
     echo "❌ /opt/marznode not found. Installing..."
     bash <(curl -Ls https://raw.githubusercontent.com/mikeesierrah/ez-node/main/marznode.sh)
     exit 0
+else
+    read -p "⚠️ /opt/marznode already exists. Do you want to delete it and reinstall? (y/N): " DELETE
+    if [[ "$DELETE" =~ ^[Yy]$ ]]; then
+        echo "🗑 Removing existing marznode..."
+        rm -rf "$MARZ_PATH"
+        echo "✅ Deleted. Installing fresh version..."
+        bash <(curl -Ls https://raw.githubusercontent.com/mikeesierrah/ez-node/main/marznode.sh)
+        exit 0
+    else
+        echo "🔄 Keeping existing marznode. Proceeding with update..."
+    fi
 fi
 
 # پیدا کردن پوشه متغیر داخل /opt/marznode
@@ -61,13 +72,19 @@ rm -f "$XRAY_DIR/$ZIP_FILE"
 echo "🧹 Cleaned up installation files."
 
 # ===============================
-# بخش اضافه‌شده برای geoip.dat و geosite.dat
+# بخش geoip.dat و geosite.dat
 # ===============================
 GEOIP_URL="https://raw.githubusercontent.com/Chocolate4U/Iran-v2ray-rules/release/geoip.dat"
 GEOSITE_URL="https://raw.githubusercontent.com/Chocolate4U/Iran-v2ray-rules/release/geosite.dat"
 
-echo "🗂 Removing old geoip.dat and geosite.dat..."
-rm -f "$XRAY_DIR/geoip.dat" "$XRAY_DIR/geosite.dat"
+# پرسش قبل از پاکسازی فایل‌های قدیمی
+read -p "⚠️ Do you want to delete old geoip.dat and geosite.dat before updating? (y/N): " DELETE_DAT
+if [[ "$DELETE_DAT" =~ ^[Yy]$ ]]; then
+    echo "🗑 Removing old geoip.dat and geosite.dat..."
+    rm -f "$XRAY_DIR/geoip.dat" "$XRAY_DIR/geosite.dat"
+else
+    echo "🔄 Keeping old geoip.dat and geosite.dat. They will be overwritten."
+fi
 
 echo "⬇️ Downloading new geoip.dat and geosite.dat..."
 curl -L -o "$XRAY_DIR/geoip.dat" "$GEOIP_URL"
