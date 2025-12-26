@@ -1,47 +1,65 @@
 #!/bin/bash
 
-# تابعی برای گرفتن Ctrl+C
-trap ctrl_c INT
+BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-ctrl_c() {
-    echo -e "\n⚡ Returning to main menu..."
-    sleep 1
-}
+# 🎨 Colors
+RED="\e[31m"
+GREEN="\e[32m"
+YELLOW="\e[33m"
+BLUE="\e[34m"
+CYAN="\e[36m"
+RESET="\e[0m"
+BOLD="\e[1m"
+
+# جلوگیری از خروج با Ctrl+C
+trap '' SIGINT
 
 while true; do
-    clear
-    echo "======================="
-    echo "   AIO Script Launcher "
-    echo "======================="
-    echo "1) adblocklist"
-    echo "4) Run script 2"
-    echo "3) Exit"
-    read -p "Choose an option [1-3]: " choice
+  clear
+  echo -e "${CYAN}${BOLD}"
+  echo "======================================"
+  echo "          🧰 JUNK TOOL MENU"
+  echo "======================================"
+  echo -e "${RESET}"
 
-    case $choice in
-        1)
-            echo "🐍 Running Python script..."
-            # Ctrl+C داخل این اسکریپت باعث برگرداندن به منو میشه
-            PY_FILE=$(mktemp /tmp/nsfwblock.py)
-            curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/refs/heads/main/nsfwblock.py -o "$PY_FILE"
-            python3 "$PY_FILE" || true
-            rm -f "$PY_FILE"
-            ;;
-        2)
-            echo "🚀 Running Bash script..."
-            bash <(curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/refs/heads/main/ssl.sh) || true
-            ;;
-        3)
-            echo "👋 Goodbye!"
-            exit 0
-            ;;
-        4)
-            echo "🐍 Running Python script..."
-            python3 <(https://raw.githubusercontent.com/omid-j-d/junk-code/refs/heads/main/nsfwblock.py) || true
-            ;;
-        *)
-            echo "❌ Invalid option, try again."
-            sleep 1
-            ;;
-    esac
+  mapfile -t SCRIPTS < <(
+    find "$BASE_DIR" -maxdepth 1 -type f \
+    \( -name "*.sh" -o -name "*.py" \) \
+    ! -name "run.sh" | sort
+  )
+
+  i=1
+  for script in "${SCRIPTS[@]}"; do
+    echo -e "${YELLOW}$i)${RESET} $(basename "$script")"
+    ((i++))
+  done
+
+  echo -e "${RED}0) Exit${RESET}"
+  echo "--------------------------------------"
+
+  read -p "Select an option: " choice
+
+  if [[ "$choice" == "0" ]]; then
+    clear
+    echo -e "${GREEN}Bye 👋${RESET}"
+    exit 0
+  fi
+
+  index=$((choice - 1))
+  if [[ -n "${SCRIPTS[$index]}" ]]; then
+    script="${SCRIPTS[$index]}"
+    clear
+    echo -e "${BLUE}▶ Running:${RESET} $(basename "$script")"
+    echo "--------------------------------------"
+
+    cd "$BASE_DIR"
+    [[ "$script" == *.py ]] && python3 "$script" || bash "$script"
+
+    echo ""
+    echo -e "${GREEN}✅ Script finished.${RESET}"
+    read -p "Press Enter to return to menu..."
+  else
+    echo -e "${RED}❌ Invalid option${RESET}"
+    sleep 1
+  fi
 done
