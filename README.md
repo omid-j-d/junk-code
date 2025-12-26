@@ -2,5 +2,4 @@ Run this command
 
 ```markdown
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/main/install.sh | bash 
+bash curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/main/install.sh | bash 
