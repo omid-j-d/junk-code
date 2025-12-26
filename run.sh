@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# ==============================
+# 🧰 JUNK TOOL MENU (Color + Dynamic)
+# ==============================
+
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 🎨 Colors
@@ -14,52 +18,72 @@ BOLD="\e[1m"
 # جلوگیری از خروج با Ctrl+C
 trap '' SIGINT
 
-while true; do
-  clear
-  echo -e "${CYAN}${BOLD}"
-  echo "======================================"
-  echo "          🧰 JUNK TOOL MENU"
-  echo "======================================"
-  echo -e "${RESET}"
-
-  mapfile -t SCRIPTS < <(
-    find "$BASE_DIR" -maxdepth 1 -type f \
-    \( -name "*.sh" -o -name "*.py" \) \
-    ! -name "run.sh" | sort
-  )
-
-  i=1
-  for script in "${SCRIPTS[@]}"; do
-    echo -e "${YELLOW}$i)${RESET} $(basename "$script")"
-    ((i++))
-  done
-
-  echo -e "${RED}0) Exit${RESET}"
-  echo "--------------------------------------"
-
-  read -p "Select an option: " choice
-
-  if [[ "$choice" == "0" ]]; then
+# ==============================
+# نمایش منو
+# ==============================
+show_menu() {
     clear
-    echo -e "${GREEN}Bye 👋${RESET}"
-    exit 0
-  fi
+    echo -e "${CYAN}${BOLD}"
+    echo "======================================"
+    echo "          🧰 JUNK TOOL MENU"
+    echo "======================================"
+    echo -e "${RESET}"
 
-  index=$((choice - 1))
-  if [[ -n "${SCRIPTS[$index]}" ]]; then
-    script="${SCRIPTS[$index]}"
+    # پیدا کردن تمام اسکریپت های .sh و .py کنار run.sh
+    mapfile -t SCRIPTS < <(
+        find "$BASE_DIR" -maxdepth 1 -type f \( -name "*.sh" -o -name "*.py" \) ! -name "$(basename "$0")" -print0 \
+        | xargs -0 -n1 realpath
+    )
+
+    i=1
+    for script in "${SCRIPTS[@]}"; do
+        echo -e "${YELLOW}$i)${RESET} $(basename "$script")"
+        ((i++))
+    done
+
+    echo -e "${RED}0) Exit${RESET}"
+    echo "--------------------------------------"
+}
+
+# ==============================
+# اجرای اسکریپت انتخاب شده
+# ==============================
+run_script() {
+    local script="$1"
     clear
     echo -e "${BLUE}▶ Running:${RESET} $(basename "$script")"
     echo "--------------------------------------"
 
     cd "$BASE_DIR"
-    [[ "$script" == *.py ]] && python3 "$script" || bash "$script"
+    if [[ "$script" == *.py ]]; then
+        python3 "$script"
+    else
+        bash "$script"
+    fi
 
     echo ""
     echo -e "${GREEN}✅ Script finished.${RESET}"
     read -p "Press Enter to return to menu..."
-  else
-    echo -e "${RED}❌ Invalid option${RESET}"
-    sleep 1
-  fi
+}
+
+# ==============================
+# حلقه منو
+# ==============================
+while true; do
+    show_menu
+    read -p "Select an option: " choice
+
+    if [[ "$choice" == "0" ]]; then
+        clear
+        echo -e "${GREEN}Bye 👋${RESET}"
+        exit 0
+    fi
+
+    index=$((choice - 1))
+    if [[ -n "${SCRIPTS[$index]}" ]]; then
+        run_script "${SCRIPTS[$index]}"
+    else
+        echo -e "${RED}❌ Invalid option${RESET}"
+        sleep 1
+    fi
 done
