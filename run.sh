@@ -4,7 +4,7 @@
 # 🧰 JUNK TOOL MENU (Color + Dynamic)
 # ==============================
 
-BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
+BASE_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 
 # 🎨 Colors
 RED="\e[31m"
