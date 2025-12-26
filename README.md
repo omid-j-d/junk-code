@@ -8,4 +8,4 @@
 Run this command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/main/install.sh | bash ```
