@@ -3,3 +3,8 @@ Run this command
 ```markdown
 
 bash curl -fsSL https://raw.githubusercontent.com/omid-j-d/junk-code/main/install.sh | bash 
+
+OR
+
+```markdown
+wget -qO- https://raw.githubusercontent.com/omid-j-d/junk-code/main/install.sh | bash
