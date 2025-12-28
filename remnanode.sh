@@ -52,8 +52,6 @@ curl -L -o "$NODE_DIR/geosite.dat" "$GEOSITE_URL"
 
 # 5️⃣ ساخت docker-compose.yml
 cat > "$NODE_DIR/docker-compose.yml" <<EOF
-version: "3.8"
-
 services:
   $NODE_NAME:
     container_name: $NODE_NAME
