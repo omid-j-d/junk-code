@@ -24,7 +24,7 @@ echo "║                                                          ║"
 echo "╚══════════════════════════════════════════════════════════╝${NC}\n"
 
 # لیست اسکریپت‌ها (به جز run.sh و install.sh، مرتب الفبایی)
-scripts=($(ls *.sh 2>/dev/null | grep -vE '^(run\.sh|install\.sh)$' | sort))
+scripts=($(ls *.sh *.py 2>/dev/null | grep -vE '^(run\.sh|install\.sh)$' | sort))
 
 if [ ${#scripts[@]} -eq 0 ]; then
     echo -e "${RED}✗ No scripts found!${NC}"
