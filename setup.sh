@@ -46,6 +46,7 @@ echo "✅ BBR enabled successfully!"
 sysctl net.ipv4.tcp_congestion_control
 
 # 🌐 مدیریت IPv6 (اختیاری)
+# 🌐 مدیریت IPv6 (اختیاری)
 echo ""
 read -p "Do you want to disable IPv6? (y/n): " disable_ipv6
 
@@ -60,16 +61,20 @@ EOF
   sysctl --system
   echo "✅ IPv6 disabled."
 else
-  # اگر فایل غیرفعال‌سازی IPv6 وجود داشت، آن را حذف کن و فعالش کن
   if [ -f "$IPV6_CONF" ]; then
     echo "Re-enabling IPv6..."
     rm -f "$IPV6_CONF"
+    # فعال کردن IPv6 روی runtime همه interface ها
+    for iface in $(ls /proc/sys/net/ipv6/conf/); do
+      echo 0 > /proc/sys/net/ipv6/conf/$iface/disable_ipv6
+    done
     sysctl --system
     echo "✅ IPv6 enabled."
   else
     echo "IPv6 is already enabled or not modified by this script."
   fi
 fi
+
 
 # 📦 آپدیت و نصب پکیج‌ها
 echo ""
