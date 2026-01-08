@@ -45,6 +45,101 @@ sysctl --system
 echo "✅ BBR enabled successfully!"
 sysctl net.ipv4.tcp_congestion_control
 
+# 🌐 مدیریت IPv6 (اختیاری)
+echo ""
+read -p "Do you want to disable IPv6? (y/n): " disable_ipv6
+
+IPV6_CONF="/etc/sysctl.d/99-disable-ipv6.conf"
+
+if [[ "$disable_ipv6" =~ ^[Yy]$ ]]; then
+  echo "Disabling IPv6..."
+  cat <<EOF > "$IPV6_CONF"
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+EOF
+  sysctl --system
+  echo "✅ IPv6 disabled."
+else
+  # اگر فایل غیرفعال‌سازی IPv6 وجود داشت، آن را حذف کن و فعالش کن
+  if [ -f "$IPV6_CONF" ]; then
+    echo "Re-enabling IPv6..."
+    rm -f "$IPV6_CONF"
+    sysctl --system
+    echo "✅ IPv6 enabled."
+  else
+    echo "IPv6 is already enabled or not modified by this script."
+  fi
+fi
+
+# 📦 آپدیت و نصب پکیج‌ها
+echo ""
+echo "🔄 Updating and upgrading system..."
+apt update -y
+apt upgrade -y
+
+echo ""
+echo "📦 Installing useful packages..."
+apt install -y \
+  git sudo curl socat vnstat nload speedtest-cli snapd \
+  lsof unzip zip htop mtr btop ufw p7zip-full \
+  ca-certificates gnupg screen
+
+# 🐳 نصب Docker (اختیاری - روش رسمی)
+echo ""
+read -p "Do you want to install Docker? (y/n): " install_docker
+
+if [[ "$install_docker" =~ ^[Yy]$ ]]; then
+  echo "🐳 Installing Docker using official script..."
+  curl -fsSL https://get.docker.com | sh
+
+  systemctl enable docker
+  systemctl start docker
+
+  # اضافه کردن یوزر اجراکننده اسکریپت به گروه docker
+  if [ -n "$SUDO_USER" ]; then
+    usermod -aG docker "$SUDO_USER"
+    echo "👤 User '$SUDO_USER' added to docker group (logout required)"
+  fi
+
+  echo "✅ Docker installed successfully!"
+  docker --version
+  docker compose version
+else
+  echo "Skipping Docker installation."
+fi
+
+# 🧹 پاکسازی نهایی
+echo ""
+echo "🧹 Cleaning up..."
+apt autoremove -y
+apt clean
+
+# 📊 خلاصه نهایی
+echo ""
+echo "========================================"
+echo "✅ Setup complete!"
+echo "----------------------------------------"
+echo "🕒 Timezone: $(timedatectl | grep 'Time zone')"
+echo "⚙️  BBR: $(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')"
+echo "🌐 IPv6: $(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}') (1 = disabled)"
+if command -v docker >/dev/null 2>&1; then
+  echo "🐳 Docker: Installed"
+else
+  echo "🐳 Docker: Not installed"
+fi
+echo "----------------------------------------"
+echo "🎉 Done!"
+fi
+
+cat <<EOF >/etc/sysctl.d/99-bbr.conf
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
+
+sysctl --system
+echo "✅ BBR enabled successfully!"
+sysctl net.ipv4.tcp_congestion_control
+
 # 🌐 غیرفعال‌سازی IPv6 (اختیاری)
 echo ""
 read -p "Do you want to disable IPv6? (y/n): " disable_ipv6
