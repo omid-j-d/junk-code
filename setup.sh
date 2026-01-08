@@ -1,338 +1,198 @@
 #!/bin/bash
-# 🚀 Server Auto Setup Script
+# 🚀 Server Auto Setup Script - Beautiful English Edition 🚀
 set -e
 
-# فقط با root اجرا شود
+# Colors for beauty
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# Must run as root
 if [ "$EUID" -ne 0 ]; then
-    echo "❌ Please run this script as root"
+    echo -e "${RED}✗ Please run this script as root${NC}"
     exit 1
 fi
 
-echo "==============================="
-echo " Server Auto Setup Script"
-echo "==============================="
+clear
+echo -e "${PURPLE}"
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║                                                          ║"
+echo "║        🚀 Welcome to Server Auto Setup Script 🚀        ║"
+echo "║                                                          ║"
+echo "╚══════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
 
-# 🕒 تنظیم ساعت و منطقه زمانی
-echo ""
-echo "🔍 Detecting server timezone from IP..."
+# Timezone setup ⏰
+echo -e "${CYAN}⏳ Detecting timezone from IP...${NC}"
 TIMEZONE=$(curl -s https://ipapi.co/timezone || true)
 if [ -n "$TIMEZONE" ]; then
-    echo "🌍 Setting timezone to $TIMEZONE"
+    echo -e "${GREEN}✔ Timezone detected: $TIMEZONE${NC}"
     timedatectl set-timezone "$TIMEZONE"
 else
-    echo "⚠️ Could not detect timezone automatically. Using UTC."
+    echo -e "${YELLOW}⚠ Auto detection failed. Using UTC.${NC}"
     timedatectl set-timezone UTC
 fi
-timedatectl status | grep "Time zone"
+echo -e "${BLUE}📅 Current timezone: $(timedatectl | grep 'Time zone' | awk -F: '{print $2}' | xargs)${NC}\n"
 
-# 💡 مدیریت TCP congestion control (BBR/Cubic)
-echo ""
+# TCP Congestion Control ⚡
+echo -e "${CYAN}🔧 Configuring TCP congestion control${NC}"
 CURRENT_CC=$(sysctl -n net.ipv4.tcp_congestion_control)
-echo "⚡ Current TCP congestion control algorithm: $CURRENT_CC"
-echo "Choose TCP congestion control algorithm:"
-echo "  b = BBR"
-echo "  c = Cubic"
-echo "  k = Keep current ($CURRENT_CC)"
-read -p "Enter your choice [b/c/k]: " cc_choice
+echo -e "Current algorithm: ${YELLOW}$CURRENT_CC${NC}"
+echo -e "${BOLD}Options:${NC}"
+echo "  1 = BBR 🚀 (Recommended - Better performance)"
+echo "  2 = Cubic 🐢"
+echo "  3 = Keep current"
+read -p $'\n🔹 Your choice [1/2/3] (default: 1 - BBR): ' cc_choice
+cc_choice=${cc_choice:-1}
 
 case "$cc_choice" in
-    b|B)
-        echo "Enabling BBR..."
+    1)
+        echo -e "${GREEN}🚀 Enabling BBR...${NC}"
         modprobe tcp_bbr || true
-        if ! grep -q "tcp_bbr" /etc/modules-load.d/modules.conf 2>/dev/null; then
-            echo "tcp_bbr" >> /etc/modules-load.d/modules.conf
-        fi
-        cat <<EOF >/etc/sysctl.d/99-bbr.conf
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
+        echo "tcp_bbr" >> /etc/modules-load.d/modules.conf 2>/dev/null || true
+        cat <<EOF >/etc/sysctl.d/99-tcp-bbr.conf
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
 EOF
         sysctl --system
-        echo "✅ BBR enabled successfully!"
+        echo -e "${GREEN}✔ BBR enabled successfully!${NC}"
         ;;
-    c|C)
-        echo "Switching to Cubic..."
-        cat <<EOF >/etc/sysctl.d/99-bbr.conf
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=cubic
+    2)
+        echo -e "${GREEN}🐢 Enabling Cubic...${NC}"
+        cat <<EOF >/etc/sysctl.d/99-tcp-bbr.conf
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = cubic
 EOF
         sysctl --system
-        echo "✅ Cubic enabled successfully!"
+        echo -e "${GREEN}✔ Cubic enabled successfully!${NC}"
         ;;
-    k|K)
-        echo "Keeping current TCP congestion control: $CURRENT_CC"
+    3|"")
+        echo -e "${YELLOW}⚠ Keeping current: $CURRENT_CC${NC}"
         ;;
     *)
-        echo "Invalid choice, keeping current: $CURRENT_CC"
+        echo -e "${YELLOW}⚠ Invalid choice! Falling back to BBR.${NC}"
+        modprobe tcp_bbr || true
+        echo "tcp_bbr" >> /etc/modules-load.d/modules.conf 2>/dev/null || true
+        cat <<EOF >/etc/sysctl.d/99-tcp-bbr.conf
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+        sysctl --system
+        echo -e "${GREEN}✔ BBR enabled (fallback).${NC}"
         ;;
 esac
 
-# 🌐 مدیریت IPv6 (اختیاری)
-echo ""
-read -p "Do you want to disable IPv6? (y/n): " disable_ipv6
+# IPv6 Management
+echo -e "\n${CYAN}🔒 IPv6 settings${NC}"
+read -p $'🔹 Disable IPv6? (y/n) [default: n]: ' disable_ipv6
+disable_ipv6=${disable_ipv6:-n}
+
 IPV6_CONF="/etc/sysctl.d/99-disable-ipv6.conf"
 
 if [[ "$disable_ipv6" =~ ^[Yy]$ ]]; then
-    echo "Disabling IPv6..."
+    echo -e "${GREEN}🔒 Disabling IPv6...${NC}"
     cat <<EOF > "$IPV6_CONF"
 net.ipv6.conf.all.disable_ipv6 = 1
 net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
     sysctl --system
-    echo "✅ IPv6 disabled."
+    echo -e "${GREEN}✔ IPv6 disabled.${NC}"
 else
     if [ -f "$IPV6_CONF" ]; then
-        echo "Re-enabling IPv6..."
+        echo -e "${GREEN}🔓 Re-enabling IPv6...${NC}"
         rm -f "$IPV6_CONF"
-        for iface in $(ls /proc/sys/net/ipv6/conf/ 2>/dev/null); do
-            if [ -f "/proc/sys/net/ipv6/conf/$iface/disable_ipv6" ]; then
-                echo 0 > "/proc/sys/net/ipv6/conf/$iface/disable_ipv6"
-            fi
-        done
         sysctl --system
-        echo "✅ IPv6 enabled."
+        echo -e "${GREEN}✔ IPv6 enabled.${NC}"
     else
-        echo "IPv6 is already enabled or not modified by this script."
+        echo -e "${YELLOW}⚠ IPv6 unchanged.${NC}"
     fi
 fi
 
-# 📦 آپدیت و نصب پکیج‌ها
-echo ""
-echo "🔄 Updating and upgrading system..."
-apt update -y
-apt upgrade -y
+# Swap Management 💾
+echo -e "\n${CYAN}💾 Managing swap space...${NC}"
 
-echo ""
-echo "📦 Installing useful packages..."
-apt install -y \
-    git sudo curl socat vnstat nload speedtest-cli snapd \
-    lsof unzip zip htop mtr btop ufw p7zip-full \
-    ca-certificates gnupg screen
+CURRENT_SWAP=$(swapon --show=NAME,SIZE --noheadings | awk '{print $1}' | head -1 || true)
 
-# 🐳 نصب Docker (اختیاری)
-echo ""
-read -p "Do you want to install Docker? (y/n): " install_docker
+if [ -n "$CURRENT_SWAP" ]; then
+    echo -e "${YELLOW}⚠ Existing swap found: $CURRENT_SWAP${NC}"
+    echo "Disabling and removing..."
+    swapoff "$CURRENT_SWAP" || true
+    rm -f "$CURRENT_SWAP"
+    sed -i '\|'"$CURRENT_SWAP"'|d' /etc/fstab
+    echo -e "${GREEN}✔ Previous swap removed.${NC}"
+else
+    echo -e "${GREEN}✔ No existing swap found.${NC}"
+fi
+
+read -p $'🔹 Desired swap size in GB (e.g. 2, 4, 8) or 0 to skip [default: 0]: ' swap_gb
+swap_gb=${swap_gb:-0}
+
+if [ "$swap_gb" -gt 0 ] 2>/dev/null; then
+    echo -e "${GREEN}💾 Creating $swap_gb GB swap file...${NC}"
+    SWAP_FILE="/swapfile"
+    fallocate -l "${swap_gb}G" "$SWAP_FILE"
+    chmod 600 "$SWAP_FILE"
+    mkswap "$SWAP_FILE"
+    swapon "$SWAP_FILE"
+    if ! grep -q "$SWAP_FILE" /etc/fstab; then
+        echo "$SWAP_FILE none swap sw 0 0" >> /etc/fstab
+    fi
+    echo -e "${GREEN}✔ $swap_gb GB swap created and enabled!${NC}"
+else
+    echo -e "${YELLOW}⚠ Skipping swap creation.${NC}"
+fi
+
+echo -e "\n${BLUE}📊 Current swap status:${NC}"
+swapon --show || echo "No swap active."
+
+# System update & packages 📦
+echo -e "\n${CYAN}📦 Updating system and installing packages...${NC}"
+apt update -y && apt upgrade -y
+
+echo -e "${GREEN}✔ Installing useful tools...${NC}"
+apt install -y git sudo curl socat vnstat nload speedtest-cli snapd lsof unzip zip htop mtr btop ufw p7zip-full ca-certificates gnupg screen
+
+# Docker installation 🐳
+echo -e "\n${CYAN}🐳 Docker installation${NC}"
+read -p $'🔹 Install Docker? (y/n) [default: y]: ' install_docker
+install_docker=${install_docker:-y}
+
 if [[ "$install_docker" =~ ^[Yy]$ ]]; then
-    echo "🐳 Installing Docker using official script..."
+    echo -e "${GREEN}🐳 Installing Docker...${NC}"
     curl -fsSL https://get.docker.com | sh
-    systemctl enable docker
-    systemctl start docker
+    systemctl enable --now docker
     if [ -n "$SUDO_USER" ]; then
         usermod -aG docker "$SUDO_USER"
-        echo "👤 User '$SUDO_USER' added to docker group (logout required)"
+        echo -e "${YELLOW}⚠ User '$SUDO_USER' added to docker group (re-login needed)${NC}"
     fi
-    echo "✅ Docker installed successfully!"
-    docker --version
-    docker compose version
+    echo -e "${GREEN}✔ Docker installed! Version: $(docker --version)${NC}"
 else
-    echo "Skipping Docker installation."
+    echo -e "${YELLOW}⚠ Skipping Docker.${NC}"
 fi
 
-# 🧹 پاکسازی نهایی
-echo ""
-echo "🧹 Cleaning up..."
-apt autoremove -y
-apt clean
+# Cleanup 🧹
+echo -e "\n${CYAN}🧹 Cleaning up...${NC}"
+apt autoremove -y && apt clean
 
-# 📊 خلاصه نهایی
-echo ""
-echo "========================================"
-echo "✅ Setup complete!"
-echo "----------------------------------------"
-echo "🕒 Timezone: $(timedatectl | grep 'Time zone')"
-CC_FINAL=$(sysctl -n net.ipv4.tcp_congestion_control)
-echo "⚡ TCP congestion control: $CC_FINAL"
-IPV6_STATUS=$(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}')
-echo "🌐 IPv6: ${IPV6_STATUS:-0} (1 = disabled)"
+# Final summary 🎉
+echo -e "\n${PURPLE}╔══════════════════════════════════════════════════════════╗"
+echo "║                     🎉 Setup Complete! 🎉                  ║"
+echo "╚══════════════════════════════════════════════════════════╝${NC}"
+echo -e "${BOLD}Summary:${NC}"
+echo -e "📅 Timezone: $(timedatectl | grep 'Time zone' | awk -F: '{print $2}' | xargs)"
+echo -e "⚡ TCP Congestion: $(sysctl -n net.ipv4.tcp_congestion_control)"
+echo -e "🔒 IPv6 disabled: $(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $NF}' || echo "N/A") (1 = disabled)"
+echo -e "💾 Swap: $(swapon --show=SIZE --noheadings --bytes | numfmt --to=iec || echo "None")"
 if command -v docker >/dev/null 2>&1; then
-    echo "🐳 Docker: Installed"
+    echo -e "🐳 Docker: Installed ($(docker --version))"
 else
-    echo "🐳 Docker: Not installed"
+    echo -e "🐳 Docker: Not installed"
 fi
-echo "----------------------------------------"
-echo "🎉 Done!"
-fi
-
-cat <<EOF >/etc/sysctl.d/99-bbr.conf
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-EOF
-
-sysctl --system
-echo "✅ BBR enabled successfully!"
-sysctl net.ipv4.tcp_congestion_control
-# 🌐 مدیریت IPv6 (اختیاری)
-echo ""
-read -p "Do you want to disable IPv6? (y/n): " disable_ipv6
-
-IPV6_CONF="/etc/sysctl.d/99-disable-ipv6.conf"
-
-if [[ "$disable_ipv6" =~ ^[Yy]$ ]]; then
-    echo "Disabling IPv6..."
-    cat <<EOF > "$IPV6_CONF"
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-EOF
-    sysctl --system
-    echo "✅ IPv6 disabled."
-else
-    if [ -f "$IPV6_CONF" ]; then
-        echo "Re-enabling IPv6..."
-        rm -f "$IPV6_CONF"
-
-        # فعال کردن IPv6 روی runtime همه interface ها
-        for iface in $(ls /proc/sys/net/ipv6/conf/ 2>/dev/null); do
-            if [ -f "/proc/sys/net/ipv6/conf/$iface/disable_ipv6" ]; then
-                echo 0 > "/proc/sys/net/ipv6/conf/$iface/disable_ipv6"
-            fi
-        done
-
-        sysctl --system
-        echo "✅ IPv6 enabled."
-    else
-        echo "IPv6 is already enabled or not modified by this script."
-    fi
-fi
-
-# 📦 آپدیت و نصب پکیج‌ها
-echo ""
-echo "🔄 Updating and upgrading system..."
-apt update -y
-apt upgrade -y
-
-echo ""
-echo "📦 Installing useful packages..."
-apt install -y \
-  git sudo curl socat vnstat nload speedtest-cli snapd \
-  lsof unzip zip htop mtr btop ufw p7zip-full \
-  ca-certificates gnupg screen
-
-# 🐳 نصب Docker (اختیاری - روش رسمی)
-echo ""
-read -p "Do you want to install Docker? (y/n): " install_docker
-
-if [[ "$install_docker" =~ ^[Yy]$ ]]; then
-  echo "🐳 Installing Docker using official script..."
-  curl -fsSL https://get.docker.com | sh
-
-  systemctl enable docker
-  systemctl start docker
-
-  # اضافه کردن یوزر اجراکننده اسکریپت به گروه docker
-  if [ -n "$SUDO_USER" ]; then
-    usermod -aG docker "$SUDO_USER"
-    echo "👤 User '$SUDO_USER' added to docker group (logout required)"
-  fi
-
-  echo "✅ Docker installed successfully!"
-  docker --version
-  docker compose version
-else
-  echo "Skipping Docker installation."
-fi
-
-# 🧹 پاکسازی نهایی
-echo ""
-echo "🧹 Cleaning up..."
-apt autoremove -y
-apt clean
-
-# 📊 خلاصه نهایی
-echo ""
-echo "========================================"
-echo "✅ Setup complete!"
-echo "----------------------------------------"
-echo "🕒 Timezone: $(timedatectl | grep 'Time zone')"
-echo "⚙️  BBR: $(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')"
-echo "🌐 IPv6: $(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}') (1 = disabled)"
-if command -v docker >/dev/null 2>&1; then
-  echo "🐳 Docker: Installed"
-else
-  echo "🐳 Docker: Not installed"
-fi
-echo "----------------------------------------"
-echo "🎉 Done!"
-fi
-
-cat <<EOF >/etc/sysctl.d/99-bbr.conf
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-EOF
-
-sysctl --system
-echo "✅ BBR enabled successfully!"
-sysctl net.ipv4.tcp_congestion_control
-
-# 🌐 غیرفعال‌سازی IPv6 (اختیاری)
-echo ""
-read -p "Do you want to disable IPv6? (y/n): " disable_ipv6
-
-if [[ "$disable_ipv6" =~ ^[Yy]$ ]]; then
-  echo "Disabling IPv6..."
-  cat <<EOF >/etc/sysctl.d/99-disable-ipv6.conf
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-EOF
-  sysctl --system
-  echo "✅ IPv6 disabled."
-else
-  echo "Skipping IPv6 disable."
-fi
-
-# 📦 آپدیت و نصب پکیج‌ها
-echo ""
-echo "🔄 Updating and upgrading system..."
-apt update -y
-apt upgrade -y
-
-echo ""
-echo "📦 Installing useful packages..."
-apt install -y \
-  git sudo curl socat vnstat nload speedtest-cli snapd \
-  lsof unzip zip htop mtr btop ufw p7zip-full \
-  ca-certificates gnupg screen
-
-# 🐳 نصب Docker (اختیاری - روش رسمی)
-echo ""
-read -p "Do you want to install Docker? (y/n): " install_docker
-
-if [[ "$install_docker" =~ ^[Yy]$ ]]; then
-  echo "🐳 Installing Docker using official script..."
-  curl -fsSL https://get.docker.com | sh
-
-  systemctl enable docker
-  systemctl start docker
-
-  # اضافه کردن یوزر اجراکننده اسکریپت به گروه docker
-  if [ -n "$SUDO_USER" ]; then
-    usermod -aG docker "$SUDO_USER"
-    echo "👤 User '$SUDO_USER' added to docker group (logout required)"
-  fi
-
-  echo "✅ Docker installed successfully!"
-  docker --version
-  docker compose version
-else
-  echo "Skipping Docker installation."
-fi
-
-# 🧹 پاکسازی نهایی
-echo ""
-echo "🧹 Cleaning up..."
-apt autoremove -y
-apt clean
-
-# 📊 خلاصه نهایی
-echo ""
-echo "========================================"
-echo "✅ Setup complete!"
-echo "----------------------------------------"
-echo "🕒 Timezone: $(timedatectl | grep 'Time zone')"
-echo "⚙️  BBR: $(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')"
-echo "🌐 IPv6: $(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}') (1 = disabled)"
-if command -v docker >/dev/null 2>&1; then
-  echo "🐳 Docker: Installed"
-else
-  echo "🐳 Docker: Not installed"
-fi
-echo "----------------------------------------"
-echo "🎉 Done!"
+echo -e "\n${YELLOW}⚠ Reboot recommended for full effect!${NC}"
+echo -e "${PURPLE}╔══════════════════════════════════════════════════════════╗${NC}"
