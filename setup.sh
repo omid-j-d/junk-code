@@ -72,7 +72,7 @@ echo "📦 Installing useful packages..."
 apt install -y \
   git sudo curl socat vnstat nload speedtest-cli snapd \
   lsof unzip zip htop mtr btop ufw p7zip-full \
-  ca-certificates gnupg
+  ca-certificates gnupg screen
 
 # 🐳 نصب Docker (اختیاری - روش رسمی)
 echo ""
