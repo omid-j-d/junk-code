@@ -1,5 +1,5 @@
 #!/bin/bash
-# 🚀 Junk Scripts Menu - Supports .sh & .py 🚀
+# 🚀 Junk Scripts Menu - Fixed Return to Menu 🚀
 set -e
 
 # Colors
@@ -59,7 +59,8 @@ if [ "$choice" = "$update_option" ]; then
     else
         echo -e "${RED}✗ Update failed (not a git repo?)${NC}"
     fi
-    read -p "Press Enter to continue..."
+    echo -e "${YELLOW}Press Enter to continue...${NC}"
+    read -r
     exec "$0"
 fi
 
@@ -75,20 +76,28 @@ echo -e "${GREEN}🚀 Running $selected_script ...${NC}\n"
 # مجوز اجرا
 chmod +x "$selected_script" 2>/dev/null || true
 
-# اجرا بر اساس نوع فایل
+# اجرای اسکریپت
 if [[ "$selected_script" == *.py ]]; then
     if ! command -v python3 &> /dev/null; then
         echo -e "${RED}✗ Python3 not installed! Install it first: apt install python3${NC}"
-        read -p "Press Enter to continue..."
+        echo -e "${YELLOW}Press Enter to continue...${NC}"
+        read -r
         exec "$0"
     fi
     python3 "$selected_script"
-elif head -n 10 "$selected_script" | grep -q "root" || [[ "$selected_script" == setup.sh ]]; then
-    sudo bash "$selected_script"
 else
-    bash "$selected_script"
+    # اگر نیاز به root داشت → با sudo اجرا کن، اما در subshell
+    if head -n 10 "$selected_script" | grep -q "root" || [[ "$selected_script" == setup.sh ]] || [[ "$selected_script" == pingtunnel.sh ]]; then
+        sudo bash "$selected_script"
+    else
+        bash "$selected_script"
+    fi
 fi
 
-echo -e "\n${GREEN}✔ Done!${NC}"
-read -p "Press Enter to return to menu..."
+# این بخش همیشه اجرا می‌شه (چون set -e داریم و خطا نبود)
+echo -e "\n${GREEN}✔ Script finished successfully!${NC}"
+echo -e "${YELLOW}Press Enter to return to menu...${NC}"
+read -r
+
+# بازگشت به منو
 exec "$0"
