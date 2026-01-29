@@ -14,7 +14,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # پیش‌نیازها
-#apt update -y
+
 apt install -y git python3 curl
 
 # دانلود repo
