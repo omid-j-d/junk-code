@@ -27,17 +27,7 @@ echo "║                                                          ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# Timezone setup ⏰
-echo -e "${CYAN}⏳ Detecting timezone from IP...${NC}"
-TIMEZONE=$(curl -s https://ipapi.co/timezone || true)
-if [ -n "$TIMEZONE" ]; then
-    echo -e "${GREEN}✔ Timezone detected: $TIMEZONE${NC}"
-    timedatectl set-timezone "$TIMEZONE"
-else
-    echo -e "${YELLOW}⚠ Auto detection failed. Using UTC.${NC}"
-    timedatectl set-timezone UTC
-fi
-echo -e "${BLUE}📅 Current timezone: $(timedatectl | grep 'Time zone' | awk -F: '{print $2}' | xargs)${NC}\n"
+
 
 # TCP Congestion Control ⚡
 echo -e "${CYAN}🔧 Configuring TCP congestion control${NC}"
