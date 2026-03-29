@@ -65,6 +65,8 @@ services:
     volumes:
       - './geosite.dat:/usr/local/share/xray/geo-zapret.dat'
       - './geoip.dat:/usr/local/share/xray/ip-zapret.dat'
+    cap_add:
+      - NET_ADMIN
 EOF
 
 # 6️⃣ اجرای خودکار کانتینر
