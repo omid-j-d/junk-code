@@ -599,8 +599,8 @@ set_debian_mirror() {
                 # Preserve suites, components, options and Signed-By exactly.
                 # Do not touch unrelated repositories (for example Docker).
                 sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; /signed-by=/! s#^(deb(-src)?)[[:space:]]+#\1 [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp] #; }" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; /signed-by=/! s#^(deb(-src)?)[[:space:]]+#\1 [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp] #; }" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; }" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; }" \
                     -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
                     -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
                     "$file" || true
@@ -624,13 +624,8 @@ set_debian_mirror() {
                         ismain = (suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)" || suites ~ "(^|[[:space:]])" codename "-updates([[:space:]]|$)")
                         issecurity = (suites ~ "(^|[[:space:]])" codename "-security([[:space:]]|$)")
                         if (ismain && !issecurity) {
-                            has_signed=0
                             for (i=1; i<=n; i++) {
-                                if (lines[i] ~ /^[[:space:]]*Signed-By:[[:space:]]*/) has_signed=1
                                 if (lines[i] ~ /^[[:space:]]*URIs:[[:space:]]*/) lines[i]="URIs: " newurl
-                            }
-                            if (!has_signed) {
-                                lines[++n]="Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp"
                             }
                         }
                         for (i=1; i<=n; i++) print lines[i]
