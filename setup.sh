@@ -350,141 +350,132 @@ detect_public_country() {
 # Debian publishes the authoritative complete mirror list. Extract the
 # package mirrors belonging to the detected country from that live list.
 discover_debian_country_mirrors() {
-    local country="$1" html plain
+    local country="$1" html block site path
     [[ -n "$country" ]] || return 0
 
     html="$(curl4 -fsSL --max-time 20 https://www.debian.org/mirror/list-full 2>/dev/null || true)"
     [[ -n "$html" ]] || return 0
 
-    # The Debian mirror page is HTML. Strip markup first, then parse the
-    # human-readable mirror records. This is deliberately done before looking
-    # for the country heading because the source contains anchors/attributes
-    # around the <h3> element which vary over time.
-    plain="$(printf '%s\n' "$html" | sed \
-        -e 's/<[^>]*>/ /g' \
-        -e 's/&#160;/ /g' \
-        -e 's/&nbsp;/ /g' \
-        -e 's/[[:space:]][[:space:]]*/ /g' | sed -E 's/^ +//; s/ +$//')"
+    # The official page is HTML.  Work on only the requested country's <h3>
+    # section, then pair each "Site:" with its following "Packages over HTTP:"
+    # entry.  Do not parse the rendered/markdown representation.
+    block="$(printf '%s\n' "$html" | sed -n "/<h3[^>]*>[[:space:]]*${country}[[:space:]]*<\\/h3>/,/<h3[^>]*>/p" | sed '$d')"
+    [[ -n "$block" ]] || return 0
 
-    printf '%s\n' "$plain" | awk -v country="$country" '
-        BEGIN { in_country=0; site="" }
-
-        # Country headings are emitted as a single plain-text line after the
-        # HTML has been stripped.
-        $0 == country {
-            if (!in_country) {
-                in_country=1
-                next
+    printf '%s\n' "$block" | awk '
+        /Site:/ {
+            line=$0
+            if (match(line, /<code>[^<]+<\/code>/)) {
+                site=substr(line, RSTART+6, RLENGTH-13)
+            } else if (match(line, /`[^`]+`/)) {
+                site=substr(line, RSTART+1, RLENGTH-2)
             }
-        }
-
-        # The next country heading terminates the current section. The country
-        # list is known to contain headings before each mirror block; accepting
-        # an exact line here avoids matching hostnames or comments.
-        in_country && $0 ~ /^[A-Z][A-Za-z .,&()\x27-]+$/ && $0 != country {
-            # Only terminate if this looks like a country heading. We use the
-            # known country names from the Debian page to avoid treating a
-            # random prose line as a heading.
-            split("Argentina|Armenia|Australia|Austria|Azerbaijan|Bangladesh|Belarus|Belgium|Brazil|Bulgaria|Cambodia|Canada|Chile|China|Costa Rica|Croatia|Czech Republic|Denmark|Ecuador|Estonia|Finland|France|Georgia|Germany|Greece|Hong Kong|Hungary|Iceland|India|Indonesia|Iran|Ireland|Israel|Italy|Japan|Kazakhstan|Kenya|Korea|Kuwait|Latvia|Lithuania|Luxembourg|Malaysia|Morocco|Mexico|Netherlands|New Caledonia|New Zealand|Norway|Poland|Portugal|Puerto Rico|Romania|Russia|Saudi Arabia|Serbia|Singapore|Slovakia|South Africa|Spain|Sweden|Switzerland|Taiwan|Thailand|Turkey|Ukraine|United Kingdom|United States|Uruguay|Vietnam", countries, "|")
-            for (i in countries) if ($0 == countries[i]) exit
-        }
-
-        !in_country { next }
-
-        if ($0 ~ /^Site:[[:space:]]*/) {
-            site=$0
-            sub(/^Site:[[:space:]]*/, "", site)
             next
         }
-
-        if (site != "" && $0 ~ /^Packages over HTTP:[[:space:]]*/) {
-            path=$0
-            sub(/^Packages over HTTP:[[:space:]]*/, "", path)
-            # Strip trailing metadata and punctuation introduced by the HTML
-            # conversion, retaining only the archive path.
-            sub(/[[:space:]]+.*$/, "", path)
-            gsub(/[[:space:]]/, "", path)
-            if (path !~ /^\//) path="/" path
-            print site "|https://" site path
+        /Packages over HTTP:/ {
+            line=$0
+            url=""
+            if (match(line, /href="[^"]+"/)) {
+                url=substr(line, RSTART+6, RLENGTH-7)
+            }
+            if (site != "" && url != "") {
+                # Only accept real HTTP(S) archive URLs.  Debian may list other
+                # material (CD images, old releases) in the same site block.
+                if (url ~ /^https?:\/\//) print site "|" url
+            }
             site=""
         }
-    '
+    ' | sed 's/[[:space:]]*$//' | sort -u
 }
 
 # Ubuntu exposes the best official archive mirrors for a country through
 # Launchpad. The result can include several mirrors in the country (or the
 # country's continent plus the primary mirror when the country has none).
 discover_ubuntu_country_mirrors() {
-    local code="$1" country_url json url
+    local code="$1" country_url json obj url
     [[ -n "$code" ]] || return 0
     code="${code^^}"
     country_url="https://api.launchpad.net/devel/+countries/${code}"
+
     json="$(curl4 -fsSL --max-time 15 --get \
         --data-urlencode "ws.op=getBestMirrorsForCountry" \
         --data-urlencode "country=${country_url}" \
         --data-urlencode "mirror_type=Archive" \
         https://api.launchpad.net/devel/ubuntu 2>/dev/null || true)"
+    [[ -n "$json" ]] || return 0
 
-    # Prefer HTTPS, fall back to HTTP when the mirror does not advertise HTTPS.
-    local https_urls http_urls
-    https_urls="$(printf '%s' "$json" | grep -o '"https_base_url"[[:space:]]*:[[:space:]]*"[^"]*"' | \
-        sed -E 's/.*"https_base_url"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' || true)"
-    while IFS= read -r url; do
-        [[ -n "$url" ]] && printf 'Local - %s|%s\n' "${url%%/}" "${url%/}"
-    done <<< "$https_urls"
+    # Launchpad deliberately returns continent/global fallbacks when a country
+    # has no local mirror.  We do NOT want those here: only mirrors whose
+    # country_link exactly matches the detected country are accepted.
+    # Split the JSON collection into mirror objects. This avoids requiring jq
+    # during the early mirror-selection phase.
+    printf '%s' "$json" | sed 's/},{/}\n{/g' | while IFS= read -r obj; do
+        [[ "$obj" == *"country_link"*"${country_url}"* ]] || continue
 
-    http_urls="$(printf '%s' "$json" | grep -o '"http_base_url"[[:space:]]*:[[:space:]]*"[^"]*"' | \
-        sed -E 's/.*"http_base_url"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' || true)"
-    while IFS= read -r url; do
-        [[ -n "$url" ]] && printf 'Local - %s|%s\n' "${url%%/}" "${url%/}"
-    done <<< "$http_urls"
+        url="$(printf '%s' "$obj" | sed -n 's/.*"https_base_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        [[ -n "$url" ]] || url="$(printf '%s' "$obj" | sed -n 's/.*"http_base_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+        [[ -n "$url" ]] || continue
+        printf 'Local - %s|%s\n' "${url%/}" "${url%/}"
+    done | sort -u
 }
 
 add_country_mirrors() {
     local -n _arr="$1"
-    local line host
+    local line host item existing
     local -a country_lines=()
+
     if ! detect_public_country; then
         warn "Could not detect server country; skipping dynamic local mirrors."
         return 0
     fi
     info "Detected public IP country: ${GEO_COUNTRY_NAME} (${GEO_COUNTRY_CODE})"
 
-    # Iranian VPSes keep the explicitly curated Iranian candidates instead of
-    # adding dynamic country mirrors, as requested.
+    # Iran is the intentional exception: use only the curated Iranian mirrors
+    # requested for this setup. Do not add mirrors from other countries.
     if [[ "$GEO_COUNTRY_CODE" == "IR" ]]; then
-        info "Iran detected: using curated Iranian mirror list."
-        return 0
-    fi
-
-    if [[ "$OS_ID" == "debian" ]]; then
+        if [[ "$OS_ID" == "debian" ]]; then
+            country_lines=(
+                "Iran - Liara|https://linux-mirror.liara.ir/repository/debian"
+                "Iran - ParsPack|https://debian.parspack.com/debian"
+                "Iran - Runflare|http://mirror-linux.runflare.com/debian"
+            )
+        else
+            country_lines=(
+                "Iran - Liara|https://linux-mirror.liara.ir/repository/ubuntu"
+                "Iran - ParsPack|https://ubuntu.parspack.com/ubuntu"
+                "Iran - Runflare|http://mirror-linux.runflare.com/ubuntu"
+            )
+        fi
+    elif [[ "$OS_ID" == "debian" ]]; then
         while IFS= read -r line; do
             [[ -n "$line" ]] && country_lines+=("$line")
-        done < <(discover_debian_country_mirrors "$GEO_COUNTRY_NAME" | head -n 8)
+        done < <(discover_debian_country_mirrors "$GEO_COUNTRY_NAME" | head -n 12)
     else
         while IFS= read -r line; do
             [[ -n "$line" ]] && country_lines+=("$line")
-        done < <(discover_ubuntu_country_mirrors "$GEO_COUNTRY_CODE")
+        done < <(discover_ubuntu_country_mirrors "$GEO_COUNTRY_CODE" | head -n 12)
     fi
 
     for line in "${country_lines[@]}"; do
         host="${line#*|}"
         [[ -n "$host" ]] || continue
-        # Avoid duplicates with the curated list.
-        local duplicate=0 item existing
+        local duplicate=0
         for item in "${_arr[@]}"; do
             existing="${item#*|}"
-            if [[ "${existing%/}" == "${host%/}" ]]; then duplicate=1; break; fi
+            if [[ "${existing%/}" == "${host%/}" ]]; then
+                duplicate=1
+                break
+            fi
         done
-        if ((duplicate==0)); then
+        if ((duplicate == 0)); then
             _arr+=("$line")
         fi
     done
 
     if ((${#country_lines[@]})); then
-        ok "Added ${#country_lines[@]} dynamic ${OS_ID^} mirror candidate(s) from ${GEO_COUNTRY_NAME}."
+        ok "Added ${#country_lines[@]} local ${OS_ID^} mirror candidate(s) from ${GEO_COUNTRY_NAME}."
     else
-        warn "No usable dynamic ${OS_ID^} mirror candidate was discovered for ${GEO_COUNTRY_NAME}."
+        warn "No official local ${OS_ID^} mirror candidate was discovered for ${GEO_COUNTRY_NAME}."
     fi
 }
 
@@ -708,37 +699,27 @@ configure_mirror() {
         echo -e "\n${CYAN}🌐 APT mirror${NC}"; get_selected_mirror
         [[ -n "$SELECTED_MIRROR" ]] && echo "Saved mirror: $SELECTED_MIRROR"
         [[ -n "$SELECTED_SECURITY_MIRROR" ]] && echo "Security mirror: $SELECTED_SECURITY_MIRROR ($SECURITY_MODE)"
-        local candidates
-        if [[ "$OS_ID" == "debian" ]]; then
-            candidates=(
-                "Debian CDN|https://deb.debian.org/debian"
-                "Iran - Liara|https://linux-mirror.liara.ir/repository/debian"
-                "Iran - ParsPack|https://debian.parspack.com/debian"
-                "Iran - Runflare|http://mirror-linux.runflare.com/debian"
-                "Netherlands - Leaseweb|https://mirror.nl.leaseweb.net/debian"
-                "Netherlands - UTwente|https://debian.snt.utwente.nl/debian"
-                "Germany - FAU|https://ftp.fau.de/debian"
-                "Germany - Debian country mirror|https://ftp.de.debian.org/debian"
-                "Kernel.org|https://mirrors.kernel.org/debian"
-            )
-        else
-            candidates=(
-                "Ubuntu primary|https://archive.ubuntu.com/ubuntu"
-                "Iran - Liara|https://linux-mirror.liara.ir/repository/ubuntu"
-                "Iran - ParsPack|https://ubuntu.parspack.com/ubuntu"
-                "Iran - Runflare|http://mirror-linux.runflare.com/ubuntu"
-                "Netherlands|https://nl.archive.ubuntu.com/ubuntu"
-                "Germany|https://de.archive.ubuntu.com/ubuntu"
-            )
-        fi
+        local candidates=()
         add_country_mirrors candidates
-        echo "  0) Keep current"
-        local i=1 item name url choice
-        for item in "${candidates[@]}"; do name="${item%%|*}"; url="${item#*|}"; echo "  $i) $name - $url"; ((i+=1)); done
-        echo "  T) Benchmark all mirrors (download speed)"
-        echo "  A) Automatically select fastest mirror"
-        echo "  C) Custom mirror URL"
-        echo "  S) Skip this stage"
+
+        if ((${#candidates[@]} == 0)); then
+            warn "No official local mirror was discovered for ${GEO_COUNTRY_NAME:-the detected country}."
+            echo "  C) Custom mirror URL"
+            echo "  S) Skip this stage"
+        else
+            echo "  0) Keep current"
+            local i=1 item name url choice
+            for item in "${candidates[@]}"; do
+                name="${item%%|*}"
+                url="${item#*|}"
+                echo "  $i) $name - $url"
+                ((i+=1))
+            done
+            echo "  T) Benchmark all local mirrors (download speed)"
+            echo "  A) Automatically select fastest local mirror"
+            echo "  C) Custom mirror URL"
+            echo "  S) Skip this stage"
+        fi
         read -r -p $'🔹 Choice [0]: ' choice; choice="${choice:-0}"
 
         if is_skip "$choice"; then info "Skipping mirror configuration."; return; fi
