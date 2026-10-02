@@ -14,8 +14,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # پیش‌نیازها
-apt update && apt upgrade -y
-apt install -y sudo git python3 curl
+apt -o Acquire::ForceIPv4=true update && apt -o Acquire::ForceIPv4=true upgrade -y
+apt -o Acquire::ForceIPv4=true install -y sudo git python3 curl
 
 # دانلود repo
 rm -rf "$DEST"
