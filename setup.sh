@@ -350,42 +350,69 @@ detect_public_country() {
 # Debian publishes the authoritative complete mirror list. Extract the
 # package mirrors belonging to the detected country from that live list.
 discover_debian_country_mirrors() {
-    local country="$1" html block site path
+    local country="$1" html text
     [[ -n "$country" ]] || return 0
 
     html="$(curl4 -fsSL --max-time 20 https://www.debian.org/mirror/list-full 2>/dev/null || true)"
     [[ -n "$html" ]] || return 0
 
-    # The official page is HTML.  Work on only the requested country's <h3>
-    # section, then pair each "Site:" with its following "Packages over HTTP:"
-    # entry.  Do not parse the rendered/markdown representation.
-    block="$(printf '%s\n' "$html" | sed -n "/<h3[^>]*>[[:space:]]*${country}[[:space:]]*<\\/h3>/,/<h3[^>]*>/p" | sed '$d')"
-    [[ -n "$block" ]] || return 0
+    text="$(printf '%s\n' "$html" |
+        sed -E \
+          -e 's#<h3[^>]*>#\n@@COUNTRY@@ #g' \
+          -e 's#</h3>#\n#g' \
+          -e 's#</p>#\n#g' \
+          -e 's#</li>#\n#g' \
+          -e 's#<br[[:space:]]*/?>#\n#g' \
+          -e 's#<[^>]+>##g' \
+          -e 's/\&amp;/\&/g' \
+          -e 's/\&nbsp;/ /g' |
+        sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
 
-    printf '%s\n' "$block" | awk '
-        /Site:/ {
-            line=$0
-            if (match(line, /<code>[^<]+<\/code>/)) {
-                site=substr(line, RSTART+6, RLENGTH-13)
-            } else if (match(line, /`[^`]+`/)) {
-                site=substr(line, RSTART+1, RLENGTH-2)
-            }
+    printf '%s\n' "$text" | awk -v wanted="$country" '
+        function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+        /^@@COUNTRY@@ / {
+            current=trim(substr($0,13))
+            active=(current == wanted)
+            site=""
             next
         }
-        /Packages over HTTP:/ {
-            line=$0
-            url=""
-            if (match(line, /href="[^"]+"/)) {
-                url=substr(line, RSTART+6, RLENGTH-7)
-            }
-            if (site != "" && url != "") {
-                # Only accept real HTTP(S) archive URLs.  Debian may list other
-                # material (CD images, old releases) in the same site block.
-                if (url ~ /^https?:\/\//) print site "|" url
+        !active { next }
+        /^Site:[[:space:]]*/ {
+            site=trim(substr($0,6))
+            next
+        }
+        /^Packages over HTTP:[[:space:]]*/ {
+            path=trim(substr($0,20))
+            if (site != "" && path != "") {
+                if (path !~ /^\//) path="/" path
+                printf "%s|http://%s%s\n", site, site, path
             }
             site=""
+            next
         }
-    ' | sed 's/[[:space:]]*$//' | sort -u
+    ' | sort -u
+}
+
+# Debian's official country alias, e.g. ftp.de.debian.org. We validate it
+# before using it, so a syntactically possible but nonexistent alias is ignored.
+debian_country_alias() {
+    local code="${1^^}" cc
+    cc="$(printf '%s' "$code" | tr '[:upper:]' '[:lower:]')"
+    [[ "$cc" =~ ^[a-z]{2}$ ]] || return 1
+    printf 'https://ftp.%s.debian.org/debian\n' "$cc"
+}
+
+validate_debian_mirror() {
+    local url="${1%/}" arch="${2:-amd64}" suite="${3:-$OS_CODENAME}"
+    curl4 -fsSI --max-time 8 --connect-timeout 4 "$url/dists/$suite/Release" >/dev/null 2>&1 || \
+    curl4 -fsSL --max-time 8 --connect-timeout 4 -o /dev/null "$url/dists/$suite/main/binary-$arch/Packages.xz" >/dev/null 2>&1
+}
+
+ubuntu_country_alias() {
+    local code="${1^^}" cc
+    cc="$(printf '%s' "$code" | tr '[:upper:]' '[:lower:]')"
+    [[ "$cc" =~ ^[a-z]{2}$ ]] || return 1
+    printf 'https://%s.archive.ubuntu.com/ubuntu\n' "$cc"
 }
 
 # Ubuntu exposes the best official archive mirrors for a country through
@@ -421,7 +448,7 @@ discover_ubuntu_country_mirrors() {
 
 add_country_mirrors() {
     local -n _arr="$1"
-    local line host item existing
+    local line host item existing arch alias
     local -a country_lines=()
 
     if ! detect_public_country; then
@@ -429,9 +456,9 @@ add_country_mirrors() {
         return 0
     fi
     info "Detected public IP country: ${GEO_COUNTRY_NAME} (${GEO_COUNTRY_CODE})"
+    arch="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 
-    # Iran is the intentional exception: use only the curated Iranian mirrors
-    # requested for this setup. Do not add mirrors from other countries.
+    # Iran is the requested curated exception.
     if [[ "$GEO_COUNTRY_CODE" == "IR" ]]; then
         if [[ "$OS_ID" == "debian" ]]; then
             country_lines=(
@@ -447,13 +474,61 @@ add_country_mirrors() {
             )
         fi
     elif [[ "$OS_ID" == "debian" ]]; then
+        # 1) Officially registered mirrors in the exact detected country.
         while IFS= read -r line; do
-            [[ -n "$line" ]] && country_lines+=("$line")
-        done < <(discover_debian_country_mirrors "$GEO_COUNTRY_NAME" | head -n 12)
+            [[ -n "$line" ]] || continue
+            host="${line%%|*}"
+            item="${line#*|}"
+            if validate_debian_mirror "$item" "$arch" "$OS_CODENAME"; then
+                country_lines+=("${GEO_COUNTRY_NAME} - ${host}|${item}")
+            fi
+        done < <(discover_debian_country_mirrors "$GEO_COUNTRY_NAME")
+
+        # 2) If no registered mirror works, try Debian's official country alias.
+        if ((${#country_lines[@]} == 0)); then
+            if alias="$(debian_country_alias "$GEO_COUNTRY_CODE" 2>/dev/null)" &&
+               validate_debian_mirror "$alias" "$arch" "$OS_CODENAME"; then
+                country_lines+=("${GEO_COUNTRY_NAME} - Official Debian country mirror|${alias}")
+                ok "Using Debian's official country mirror alias for ${GEO_COUNTRY_NAME}."
+            else
+                info "No usable official Debian country mirror exists for ${GEO_COUNTRY_NAME}."
+            fi
+        fi
+
+        # 3) Last resort: Debian's official global CDN.
+        if ((${#country_lines[@]} == 0)); then
+            country_lines+=("Debian official primary CDN|https://deb.debian.org/debian")
+            warn "No usable official local Debian mirror was found for ${GEO_COUNTRY_NAME}."
+            info "Falling back to Debian's official primary CDN."
+        fi
     else
+        # 1) Launchpad mirrors whose country exactly matches the detected country.
         while IFS= read -r line; do
-            [[ -n "$line" ]] && country_lines+=("$line")
-        done < <(discover_ubuntu_country_mirrors "$GEO_COUNTRY_CODE" | head -n 12)
+            [[ -n "$line" ]] || continue
+            host="${line%%|*}"
+            item="${line#*|}"
+            if curl4 -fsSI --max-time 8 --connect-timeout 4 "$item/dists/$OS_CODENAME/Release" >/dev/null 2>&1; then
+                country_lines+=("${GEO_COUNTRY_NAME} - ${host}|${item}")
+            fi
+        done < <(discover_ubuntu_country_mirrors "$GEO_COUNTRY_CODE")
+
+        # 2) Ubuntu's official country archive, e.g. de.archive.ubuntu.com.
+        if ((${#country_lines[@]} == 0)); then
+            if alias="$(ubuntu_country_alias "$GEO_COUNTRY_CODE" 2>/dev/null)" &&
+               curl4 -fsSI --max-time 8 --connect-timeout 4 "$alias/dists/$OS_CODENAME/Release" >/dev/null 2>&1; then
+                country_lines+=("${GEO_COUNTRY_NAME} - Official Ubuntu country archive|${alias}")
+                ok "Using Ubuntu's official country archive for ${GEO_COUNTRY_NAME}."
+            else
+                info "No usable official Ubuntu country archive exists for ${GEO_COUNTRY_NAME}."
+            fi
+        fi
+
+        # 3) Last resort: Ubuntu's official primary archive.
+        if ((${#country_lines[@]} == 0)); then
+            country_lines+=("Ubuntu official primary archive|https://archive.ubuntu.com/ubuntu")
+            warn "No usable official local Ubuntu mirror was found for ${GEO_COUNTRY_NAME}."
+            info "Falling back to Ubuntu's official primary archive."
+        fi
     fi
 
     for line in "${country_lines[@]}"; do
@@ -467,16 +542,10 @@ add_country_mirrors() {
                 break
             fi
         done
-        if ((duplicate == 0)); then
-            _arr+=("$line")
-        fi
+        ((duplicate == 0)) && _arr+=("$line")
     done
 
-    if ((${#country_lines[@]})); then
-        ok "Added ${#country_lines[@]} local ${OS_ID^} mirror candidate(s) from ${GEO_COUNTRY_NAME}."
-    else
-        warn "No official local ${OS_ID^} mirror candidate was discovered for ${GEO_COUNTRY_NAME}."
-    fi
+    ok "Added ${#country_lines[@]} ${OS_ID^} mirror candidate(s) for ${GEO_COUNTRY_NAME}."
 }
 
 # ---------- Mirrors ----------
