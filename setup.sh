@@ -18,6 +18,8 @@ IPV6_CONF="/etc/sysctl.d/99-disable-ipv6.conf"
 MODULES_CONF="/etc/modules-load.d/modules.conf"
 DNS_CONF="/etc/systemd/resolved.conf.d/99-junk-dns.conf"
 JUNK_CONF="/etc/junk-setup.conf"
+GEO_COUNTRY_CODE=""
+GEO_COUNTRY_NAME=""
 
 # ---------- helpers ----------
 
@@ -116,15 +118,31 @@ get_release_upgrade_info() {
             *) UPGRADE_PATH="No automatic path configured" ;;
         esac
     else
+        # Ubuntu's release upgrader can return a non-zero status even when
+        # its diagnostic output is useful. Do not use the exit code alone.
         if ! command -v do-release-upgrade >/dev/null 2>&1; then
             UPGRADE_PATH="Ubuntu upgrader not installed yet"
-        elif do-release-upgrade --check-dist-upgrade-only >/tmp/junk-release-check 2>&1; then
-            UPGRADE_PATH="$(grep -E 'New release|new release' /tmp/junk-release-check | head -n1 || true)"
-            [[ -n "$UPGRADE_PATH" ]] || UPGRADE_PATH="A supported Ubuntu release upgrade is available"
-            rm -f /tmp/junk-release-check
         else
-            UPGRADE_PATH="No supported Ubuntu release upgrade reported"
-            rm -f /tmp/junk-release-check
+            local check_output available_line current_prompt
+            check_output="$(mktemp)"
+            current_prompt="$(awk -F= '/^[[:space:]]*Prompt=/{print $2}' /etc/update-manager/release-upgrades 2>/dev/null | tr -d '[:space:]' || true)"
+
+            # Refresh package metadata first; the upgrader itself is then
+            # asked to check the supported release path.
+            apt4 update >/dev/null 2>&1 || true
+            do-release-upgrade --check-dist-upgrade-only >"$check_output" 2>&1 || true
+
+            available_line="$(grep -Eio "New release '[^']+' available|New release [^ ]+ available|new release.*available" "$check_output" | head -n1 || true)"
+            if [[ -n "$available_line" ]]; then
+                UPGRADE_PATH="$available_line"
+            elif grep -qiE 'No new release found|No new release|There are no.*release|already the newest' "$check_output"; then
+                UPGRADE_PATH="No newer supported Ubuntu release currently reported"
+            elif [[ "$current_prompt" == "never" ]]; then
+                UPGRADE_PATH="Disabled by /etc/update-manager/release-upgrades (Prompt=never)"
+            else
+                UPGRADE_PATH="Upgrade check inconclusive — run 'do-release-upgrade -c' manually"
+            fi
+            rm -f "$check_output"
         fi
     fi
 }
@@ -280,39 +298,174 @@ configure_swap() {
     done
 }
 
+# Discover the server country from its public IPv4. This is used only to
+# add country-local mirror candidates; mirror selection still depends on the
+# real IPv4 throughput benchmark.
+detect_public_country() {
+    local public_ip geo_json
+    GEO_COUNTRY_CODE=""
+    GEO_COUNTRY_NAME=""
+    public_ip="$(curl4 -fsSL --max-time 6 https://api.ipify.org 2>/dev/null | tr -d '\r\n' || true)"
+    [[ -n "$public_ip" ]] || return 1
+
+    geo_json="$(curl4 -fsSL --max-time 8 "https://ipwho.is/$public_ip" 2>/dev/null || true)"
+    GEO_COUNTRY_CODE="$(printf '%s' "$geo_json" | sed -n 's/.*"country_code"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | head -n1 | tr '[:lower:]' '[:upper:]')"
+    GEO_COUNTRY_NAME="$(printf '%s' "$geo_json" | sed -n 's/.*"country"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    [[ -n "$GEO_COUNTRY_CODE" && -n "$GEO_COUNTRY_NAME" ]]
+}
+
+# Debian publishes the authoritative complete mirror list. Extract the
+# package mirrors belonging to the detected country from that live list.
+discover_debian_country_mirrors() {
+    local country="$1" html host
+    [[ -n "$country" ]] || return 0
+    html="$(curl4 -fsSL --max-time 15 https://www.debian.org/mirror/list-full 2>/dev/null || true)"
+    [[ -n "$html" ]] || return 0
+
+    printf '%s\n' "$html" | awk -v country="$country" '
+        BEGIN { found=0 }
+        $0 ~ "^### " country "[[:space:]]*$" { found=1; next }
+        found && /^### / { exit }
+        found && /Site: `/ {
+            line=$0
+            sub(/^.*Site: `/, "", line)
+            sub(/`.*/, "", line)
+            print line
+        }
+    ' | while IFS= read -r host; do
+        [[ -n "$host" ]] || continue
+        printf 'Local - %s|https://%s/debian\n' "$host" "$host"
+    done
+}
+
+# Ubuntu exposes the best official archive mirrors for a country through
+# Launchpad. The result can include several mirrors in the country (or the
+# country's continent plus the primary mirror when the country has none).
+discover_ubuntu_country_mirrors() {
+    local code="$1" country_url json url
+    [[ -n "$code" ]] || return 0
+    code="${code^^}"
+    country_url="https://api.launchpad.net/1.0/+countries/${code}"
+    json="$(curl4 -fsSL --max-time 15 --get \
+        --data-urlencode "ws.op=getBestMirrorsForCountry" \
+        --data-urlencode "country=${country_url}" \
+        --data-urlencode "mirror_type=Archive" \
+        https://api.launchpad.net/1.0/ubuntu 2>/dev/null || true)"
+
+    # Prefer HTTPS, fall back to HTTP when the mirror does not advertise HTTPS.
+    local https_urls http_urls
+    https_urls="$(printf '%s' "$json" | grep -o '"https_base_url"[[:space:]]*:[[:space:]]*"[^"]*"' | \
+        sed -E 's/.*"https_base_url"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' || true)"
+    while IFS= read -r url; do
+        [[ -n "$url" ]] && printf 'Local - %s|%s\n' "${url%%/}" "${url%/}"
+    done <<< "$https_urls"
+
+    http_urls="$(printf '%s' "$json" | grep -o '"http_base_url"[[:space:]]*:[[:space:]]*"[^"]*"' | \
+        sed -E 's/.*"http_base_url"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/' || true)"
+    while IFS= read -r url; do
+        [[ -n "$url" ]] && printf 'Local - %s|%s\n' "${url%%/}" "${url%/}"
+    done <<< "$http_urls"
+}
+
+add_country_mirrors() {
+    local -n _arr="$1" line host country_lines=()
+    if ! detect_public_country; then
+        warn "Could not detect server country; skipping dynamic local mirrors."
+        return 0
+    fi
+    info "Detected public IP country: ${GEO_COUNTRY_NAME} (${GEO_COUNTRY_CODE})"
+
+    # Iranian VPSes keep the explicitly curated Iranian candidates instead of
+    # adding dynamic country mirrors, as requested.
+    if [[ "$GEO_COUNTRY_CODE" == "IR" ]]; then
+        info "Iran detected: using curated Iranian mirror list."
+        return 0
+    fi
+
+    if [[ "$OS_ID" == "debian" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && country_lines+=("$line")
+        done < <(discover_debian_country_mirrors "$GEO_COUNTRY_NAME" | head -n 8)
+    else
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && country_lines+=("$line")
+        done < <(discover_ubuntu_country_mirrors "$GEO_COUNTRY_CODE")
+    fi
+
+    for line in "${country_lines[@]}"; do
+        host="${line#*|}"
+        [[ -n "$host" ]] || continue
+        # Avoid duplicates with the curated list.
+        local duplicate=0 item existing
+        for item in "${_arr[@]}"; do
+            existing="${item#*|}"
+            if [[ "${existing%/}" == "${host%/}" ]]; then duplicate=1; break; fi
+        done
+        if ((duplicate==0)); then
+            _arr+=("$line")
+        fi
+    done
+
+    if ((${#country_lines[@]})); then
+        ok "Added ${#country_lines[@]} dynamic ${OS_ID^} mirror candidate(s) from ${GEO_COUNTRY_NAME}."
+    else
+        warn "No usable dynamic ${OS_ID^} mirror candidate was discovered for ${GEO_COUNTRY_NAME}."
+    fi
+}
+
 # ---------- Mirrors ----------
 backup_apt_sources() {
     local stamp backup; stamp="$(date +%Y%m%d-%H%M%S)"; backup="/root/apt-sources-backup-$stamp"
     mkdir -p "$backup"; cp -a /etc/apt/sources.list "$backup/" 2>/dev/null || true; cp -a /etc/apt/sources.list.d "$backup/" 2>/dev/null || true; echo "$backup"
 }
-mirror_test() {
-    local url="$1" codename="$2" arch="$3" bytes speed path
-    url="${url%/}"
 
-    # Test a real compressed Packages index instead of a tiny InRelease file.
-    # This gives a useful approximation of download throughput from this VPS.
-    path="dists/$codename/main/binary-$arch/Packages.xz"
+# Download a real Packages index over IPv4 and report throughput in MB/s.
+# For Ubuntu, $repo is the archive base. For Debian, security uses a separate
+# /debian-security tree and is benchmarked separately when requested.
+mirror_test() {
+    local url="$1" codename="$2" arch="$3" distro="${4:-$OS_ID}" kind="${5:-main}" speed path
+    url="${url%/}"
+    if [[ "$distro" == "ubuntu" ]]; then
+        path="dists/$codename/main/binary-$arch/Packages.xz"
+    else
+        if [[ "$kind" == "security" ]]; then
+            path="dists/${codename}-security/main/binary-$arch/Packages.xz"
+        else
+            path="dists/$codename/main/binary-$arch/Packages.xz"
+        fi
+    fi
     speed="$(curl4 -fsSL --max-time 15 --connect-timeout 5 -o /dev/null \
         -w '%{speed_download}' "$url/$path" 2>/dev/null || true)"
-
     [[ "$speed" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
     awk -v bps="$speed" 'BEGIN { printf "%.2f", bps/1048576 }'
 }
 
 get_selected_mirror() {
     SELECTED_MIRROR=""
+    SELECTED_SECURITY_MIRROR=""
+    SECURITY_MODE="official"
     if [[ -f "$JUNK_CONF" ]]; then
         # shellcheck disable=SC1090
         source "$JUNK_CONF" 2>/dev/null || true
     fi
     SELECTED_MIRROR="${JUNK_MIRROR:-}"
+    SELECTED_SECURITY_MIRROR="${JUNK_SECURITY_MIRROR:-}"
+    SECURITY_MODE="${JUNK_SECURITY_MODE:-official}"
 }
-save_selected_mirror() { printf 'JUNK_MIRROR=%q\n' "$1" > "$JUNK_CONF"; }
+save_selected_mirror() {
+    local mirror="$1"
+    printf 'JUNK_MIRROR=%q\n' "$mirror" > "$JUNK_CONF"
+    [[ -n "${SELECTED_SECURITY_MIRROR:-}" ]] && printf 'JUNK_SECURITY_MIRROR=%q\n' "$SELECTED_SECURITY_MIRROR" >> "$JUNK_CONF"
+    printf 'JUNK_SECURITY_MODE=%q\n' "${SECURITY_MODE:-official}" >> "$JUNK_CONF"
+}
 
 replace_urls_in_sources() {
     local old_pattern="$1" new_url="$2" file
-    while IFS= read -r -d '' file; do sed -i -E "s#https?://$old_pattern#${new_url}#g" "$file" || true; done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+    while IFS= read -r -d '' file; do
+        sed -i -E "s#https?://$old_pattern#${new_url}#g" "$file" || true
+    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
 }
+
 set_debian_mirror() {
     local mirror="$1" backup; mirror="${mirror%/}"; backup="$(backup_apt_sources)"
     replace_urls_in_sources '([^[:space:]#]+\.)?debian\.org/debian' "$mirror"
@@ -322,8 +475,12 @@ set_debian_mirror() {
     replace_urls_in_sources 'mirror\.arvancloud\.ir/debian' "$mirror"
     replace_urls_in_sources 'mirror\.iranserver\.com/debian' "$mirror"
     replace_urls_in_sources 'mirror\.aminidc\.com/debian' "$mirror"
+    replace_urls_in_sources 'debian\.parspack\.com/debian' "$mirror"
+    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/debian' "$mirror"
+    replace_urls_in_sources 'mirror-linux\.runflare\.com/debian' "$mirror"
     save_selected_mirror "$mirror"; ok "Debian mirror changed to $mirror"; info "APT source backup: $backup"
 }
+
 set_ubuntu_mirror() {
     local mirror="$1" backup; mirror="${mirror%/}"; backup="$(backup_apt_sources)"
     replace_urls_in_sources '([a-z]{2}\.)?archive\.ubuntu\.com/ubuntu' "$mirror"
@@ -339,19 +496,150 @@ set_ubuntu_mirror() {
     replace_urls_in_sources 'ubuntu\.mobinhost\.com/ubuntu' "$mirror"
     replace_urls_in_sources 'ubuntu\.hostiran\.ir/ubuntuarchive' "$mirror"
     replace_urls_in_sources 'mirror\.faraso\.org/ubuntu' "$mirror"
+    replace_urls_in_sources 'ubuntu\.parspack\.com/ubuntu' "$mirror"
+    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/ubuntu' "$mirror"
+    replace_urls_in_sources 'mirror-linux\.runflare\.com/ubuntu' "$mirror"
     save_selected_mirror "$mirror"; ok "Ubuntu mirror changed to $mirror"; info "APT source backup: $backup"
 }
+
+# Configure security separately from the main archive. The user can keep the
+# official security service or use the selected mirror when it actually hosts
+# the matching security tree. If it does not, we automatically fall back to
+# the official security service.
+set_debian_security() {
+    local security_url="$1" backup="$2"
+    security_url="${security_url%/}"
+    replace_urls_in_sources 'security\.debian\.org/debian-security' "$security_url"
+    replace_urls_in_sources 'mirror-linux\.runflare\.com/debian-security' "$security_url"
+    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/debian-security' "$security_url"
+    replace_urls_in_sources 'debian\.parspack\.com/debian-security' "$security_url"
+    SELECTED_SECURITY_MIRROR="$security_url"
+    SECURITY_MODE="mirror"
+    save_selected_mirror "${SELECTED_MIRROR:-https://deb.debian.org/debian}"
+    ok "Debian security mirror changed to $security_url"
+    info "APT source backup: $backup"
+}
+
+set_ubuntu_security() {
+    local security_url="$1" backup="$2"
+    security_url="${security_url%/}"
+    replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
+    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/ubuntu-security' "$security_url"
+    replace_urls_in_sources 'mirror-linux\.runflare\.com/ubuntu' "$security_url"
+    replace_urls_in_sources 'ubuntu\.parspack\.com/ubuntu' "$security_url"
+    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/ubuntu-security' "$security_url"
+    replace_urls_in_sources 'mirror-linux\.runflare\.com/ubuntu' "$security_url"
+    replace_urls_in_sources 'ubuntu\.parspack\.com/ubuntu' "$security_url"
+    SELECTED_SECURITY_MIRROR="$security_url"
+    SECURITY_MODE="mirror"
+    save_selected_mirror "${SELECTED_MIRROR:-https://archive.ubuntu.com/ubuntu}"
+    ok "Ubuntu security mirror changed to $security_url"
+    info "APT source backup: $backup"
+}
+
+configure_security_mirror() {
+    local base="$1" backup security_url speed arch answer
+    arch="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
+    backup="$(backup_apt_sources)"
+    echo -e "\n${CYAN}🔐 Security repository${NC}"
+    if [[ "$OS_ID" == "debian" ]]; then
+        echo "  1) Official Debian security"
+        echo "  2) Use selected mirror if its security repository is available"
+        echo "  S) Skip this stage"
+        while true; do
+            read -r -p $'🔹 Choice [1]: ' answer; answer="${answer:-1}"
+            case "$answer" in
+                1|[Ss]|[Ss][Kk][Ii][Pp])
+                    if [[ "$answer" == "1" ]]; then
+                        security_url="https://security.debian.org/debian-security"
+                        replace_urls_in_sources 'security\.debian\.org/debian-security' "$security_url"
+                        SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
+                        save_selected_mirror "$base"; ok "Using official Debian security repository."; info "APT source backup: $backup"
+                    else info "Skipping security repository configuration."; fi
+                    return ;;
+                2)
+                    if [[ "$base" == *"linux-mirror.liara.ir/repository/debian"* ]]; then
+                        security_url="https://linux-mirror.liara.ir/repository/debian-security"
+                    elif [[ "$base" == *"runflare.com/debian"* ]]; then
+                        security_url="${base%/}-security"
+                    else
+                        security_url="${base%/}"
+                    fi
+                    # Liara follows repository/debian-security; ParsPack's
+                    # security tree is accepted only if the benchmark succeeds.
+                    if speed="$(mirror_test "$security_url" "$OS_CODENAME" "$arch" "$OS_ID" security)"; then
+                        info "Selected mirror security repository: $security_url (${speed} MB/s)"
+                        set_debian_security "$security_url" "$backup"; return
+                    fi
+                    warn "Selected mirror does not provide a usable Debian security repository."
+                    warn "Falling back to official Debian security."
+                    security_url="https://security.debian.org/debian-security"
+                    replace_urls_in_sources 'security\.debian\.org/debian-security' "$security_url"
+                    SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
+                    save_selected_mirror "$base"; ok "Using official Debian security repository."; return ;;
+                *) warn "Invalid choice. Enter 1, 2 or S.";;
+            esac
+        done
+    else
+        echo "  1) Official Ubuntu security"
+        echo "  2) Use selected mirror if its security repository is available"
+        echo "  S) Skip this stage"
+        while true; do
+            read -r -p $'🔹 Choice [1]: ' answer; answer="${answer:-1}"
+            case "$answer" in
+                1|[Ss]|[Ss][Kk][Ii][Pp])
+                    if [[ "$answer" == "1" ]]; then
+                        security_url="https://security.ubuntu.com/ubuntu"
+                        replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
+                        SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
+                        save_selected_mirror "$base"; ok "Using official Ubuntu security repository."; info "APT source backup: $backup"
+                    else info "Skipping security repository configuration."; fi
+                    return ;;
+                2)
+                    if [[ "$base" == *"linux-mirror.liara.ir/repository/ubuntu"* ]]; then
+                        security_url="https://linux-mirror.liara.ir/repository/ubuntu-security"
+                    elif [[ "$base" == *"mirror-linux.runflare.com/ubuntu"* ]]; then
+                        security_url="$base"
+                    elif [[ "$base" == *"ubuntu.parspack.com/ubuntu"* ]]; then
+                        security_url="$base"
+                    else
+                        security_url="$base"
+                    fi
+                    if [[ "$security_url" == "$base" ]]; then
+                        # Ubuntu mirrors commonly expose -security as a suite
+                        # under the same archive tree; test the selected base.
+                        speed="$(mirror_test "$security_url" "$OS_CODENAME-security" "$arch" "$OS_ID" main 2>/dev/null || true)"
+                    else
+                        speed="$(mirror_test "$security_url" "$OS_CODENAME" "$arch" "$OS_ID" security 2>/dev/null || true)"
+                    fi
+                    if [[ -n "$speed" ]]; then
+                        info "Selected mirror security repository: $security_url (${speed} MB/s)"
+                        set_ubuntu_security "$security_url" "$backup"; return
+                    fi
+                    warn "Selected mirror does not provide a usable Ubuntu security repository."
+                    warn "Falling back to official Ubuntu security."
+                    security_url="https://security.ubuntu.com/ubuntu"
+                    replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
+                    SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
+                    save_selected_mirror "$base"; ok "Using official Ubuntu security repository."; return ;;
+                *) warn "Invalid choice. Enter 1, 2 or S.";;
+            esac
+        done
+    fi
+}
+
 configure_mirror() {
     while true; do
-        echo -e "\n${CYAN}🌐 APT mirror${NC}"; get_selected_mirror; [[ -n "$SELECTED_MIRROR" ]] && echo "Saved mirror: $SELECTED_MIRROR"
+        echo -e "\n${CYAN}🌐 APT mirror${NC}"; get_selected_mirror
+        [[ -n "$SELECTED_MIRROR" ]] && echo "Saved mirror: $SELECTED_MIRROR"
+        [[ -n "$SELECTED_SECURITY_MIRROR" ]] && echo "Security mirror: $SELECTED_SECURITY_MIRROR ($SECURITY_MODE)"
         local candidates
         if [[ "$OS_ID" == "debian" ]]; then
             candidates=(
                 "Debian CDN|https://deb.debian.org/debian"
-                "Iran - Petiak (official Debian mirror)|https://archive.debian.petiak.ir/debian"
-                "Iran - FamaServer (official Debian mirror)|https://repo.mirror.famaserver.com/debian"
-                "Iran - Pardisco|https://mirrors.pardisco.co/debian"
-                "Iran - ArvanCloud|https://mirror.arvancloud.ir/debian"
+                "Iran - Liara|https://linux-mirror.liara.ir/repository/debian"
+                "Iran - ParsPack|https://debian.parspack.com/debian"
+                "Iran - Runflare|http://mirror-linux.runflare.com/debian"
                 "Netherlands - Leaseweb|https://mirror.nl.leaseweb.net/debian"
                 "Netherlands - UTwente|https://debian.snt.utwente.nl/debian"
                 "Germany - FAU|https://ftp.fau.de/debian"
@@ -361,18 +649,14 @@ configure_mirror() {
         else
             candidates=(
                 "Ubuntu primary|https://archive.ubuntu.com/ubuntu"
-                "Iran - Petiak|https://archive.ubuntu.petiak.ir/ubuntu"
-                "Iran - Pardisco|https://mirrors.pardisco.co/ubuntu"
-                "Iran - ArvanCloud|https://mirror.arvancloud.ir/ubuntu"
-                "Iran - Sindad|https://ir.ubuntu.sindad.cloud/ubuntu"
-                "Iran - Pishgaman|https://ubuntu.pishgaman.net/ubuntu"
-                "Iran - IranServer|https://mirror.iranserver.com/ubuntu"
-                "Iran - ParsVDS|https://ubuntu.parsvds.com/ubuntu"
-                "Iran - MobinHost|https://ubuntu.mobinhost.com/ubuntu"
+                "Iran - Liara|https://linux-mirror.liara.ir/repository/ubuntu"
+                "Iran - ParsPack|https://ubuntu.parspack.com/ubuntu"
+                "Iran - Runflare|http://mirror-linux.runflare.com/ubuntu"
                 "Netherlands|https://nl.archive.ubuntu.com/ubuntu"
                 "Germany|https://de.archive.ubuntu.com/ubuntu"
             )
         fi
+        add_country_mirrors candidates
         echo "  0) Keep current"
         local i=1 item name url choice
         for item in "${candidates[@]}"; do name="${item%%|*}"; url="${item#*|}"; echo "  $i) $name - $url"; ((i+=1)); done
@@ -380,40 +664,35 @@ configure_mirror() {
         echo "  A) Automatically select fastest mirror"
         echo "  C) Custom mirror URL"
         echo "  S) Skip this stage"
-        read -r -p $'🔹 Choice [0]: ' choice
-        choice="${choice:-0}"
+        read -r -p $'🔹 Choice [0]: ' choice; choice="${choice:-0}"
 
-        if [[ "$choice" =~ ^[Ss]$|^[Ss][Kk][Ii][Pp]$ ]]; then info "Skipping mirror configuration."; return; fi
+        if is_skip "$choice"; then info "Skipping mirror configuration."; return; fi
         if [[ "$choice" == "0" ]]; then info "Keeping current mirror configuration."; return; fi
 
         if [[ "$choice" =~ ^[TtAa]$ ]]; then
             local best_url="" best_speed=0 speed arch
             arch="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
-            echo
-            echo "Testing download throughput for $OS_CODENAME/$arch..."
+            echo; echo "Testing IPv4 download throughput for $OS_CODENAME/$arch..."
             printf '%-42s %12s\n' "Mirror" "Speed"
             printf '%-42s %12s\n' "------------------------------------------" "------------"
             for item in "${candidates[@]}"; do
                 name="${item%%|*}"; url="${item#*|}"; printf '%-42s ' "$name"
-                if speed="$(mirror_test "$url" "$OS_CODENAME" "$arch")"; then
+                if speed="$(mirror_test "$url" "$OS_CODENAME" "$arch" "$OS_ID" main)"; then
                     echo "${speed} MB/s"
                     if awk -v a="$speed" -v b="$best_speed" 'BEGIN{exit !(a>b)}'; then best_speed="$speed"; best_url="$url"; fi
-                else
-                    echo "unreachable / unsupported"
-                fi
+                else echo "unreachable / unsupported"; fi
             done
             if [[ -z "$best_url" ]]; then warn "No working mirror passed the benchmark."; continue; fi
-            echo
-            info "Fastest tested mirror: $best_url (${best_speed} MB/s)"
+            echo; info "Fastest tested mirror: $best_url (${best_speed} MB/s)"
             if [[ "$choice" =~ ^[Aa]$ ]]; then
                 [[ "$OS_ID" == "debian" ]] && set_debian_mirror "$best_url" || set_ubuntu_mirror "$best_url"
-                return
+                configure_security_mirror "$best_url"; return
             fi
-            read -r -p $'Use this fastest mirror? (Y/n): ' use_best
-            use_best="${use_best:-y}"
+            read -r -p $'Use this fastest mirror? (Y/n, S=skip): ' use_best; use_best="${use_best:-y}"
+            if is_skip "$use_best"; then info "Skipping mirror configuration."; return; fi
             if [[ "$use_best" =~ ^[Yy]$ ]]; then
                 [[ "$OS_ID" == "debian" ]] && set_debian_mirror "$best_url" || set_ubuntu_mirror "$best_url"
-                return
+                configure_security_mirror "$best_url"; return
             fi
             continue
         fi
@@ -426,11 +705,10 @@ configure_mirror() {
         elif [[ "$choice" =~ ^[0-9]+$ ]] && ((choice>=1 && choice<=${#candidates[@]})); then
             item="${candidates[$((choice-1))]}"; url="${item#*|}"
         else
-            warn "Invalid choice. Enter a listed number, T, A, C or S."
-            continue
+            warn "Invalid choice. Enter a listed number, T, A, C or S."; continue
         fi
         [[ "$OS_ID" == "debian" ]] && set_debian_mirror "$url" || set_ubuntu_mirror "$url"
-        return
+        configure_security_mirror "$url"; return
     done
 }
 
