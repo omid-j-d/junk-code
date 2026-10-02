@@ -981,7 +981,8 @@ configure_dns() {
             echo "    5) AdGuard                 94.140.14.14"
             echo "    6) Custom IPv4"
             echo "    S) Skip this stage"
-            read -r -p "  Choice: " choice
+            read -r -p "  Choice [1]: " choice
+            choice="${choice:-1}"
 
             case "$choice" in
                 1)
@@ -1178,7 +1179,11 @@ configure_docker() {
         read -r -p $'🔹 Install Docker? (y/n) [default: y, S=skip]: ' install_docker; install_docker="${install_docker:-y}"
         if is_skip "$install_docker"; then info "Skipping Docker."; return; fi
         if [[ "$install_docker" =~ ^[Yy]$ ]]; then
-            if command -v docker >/dev/null 2>&1; then ok "Docker already installed: $(docker --version)"; else curl4 -fsSL https://get.docker.com | sh; systemctl enable --now docker; [[ -n "${SUDO_USER:-}" ]] && usermod -aG docker "$SUDO_USER"; ok "Docker installed: $(docker --version)"; fi
+            info "Running Docker installer (this also repairs/reinstalls an existing Docker installation when needed)."
+            curl4 -fsSL https://get.docker.com | sh
+            systemctl enable --now docker
+            [[ -n "${SUDO_USER:-}" ]] && usermod -aG docker "$SUDO_USER"
+            ok "Docker installation/repair completed: $(docker --version)"
             return
         elif [[ "$install_docker" =~ ^[Nn]$ ]]; then info "Skipping Docker."; return
         else warn "Invalid choice. Enter y, n or S."; fi
