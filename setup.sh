@@ -592,30 +592,41 @@ set_debian_mirror() {
     local mirror="$1" file tmp
     mirror="${mirror%/}"
 
-    # Rewrite only Debian archive entries for the current release/update
-    # suites. Security repositories are deliberately handled separately.
     while IFS= read -r -d '' file; do
         case "$file" in
             *.list)
+                # Replace the archive URI on normal Debian release/update lines.
                 sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]#]+/debian(/[^[:space:]#]*)?#${mirror}#g" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]#]+/debian(/[^[:space:]#]*)?#${mirror}#g" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]#]+#${mirror}#g" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]#]+#${mirror}#g" \
                     "$file" || true
                 ;;
             *.sources)
+                # Deb822 files are stanza based. Replace ONLY the URIs field in
+                # non-security stanzas containing the current release or updates.
                 tmp="${file}.junk-main.$$"
                 awk -v newurl="$mirror" -v codename="$OS_CODENAME" '
                     BEGIN { RS=""; ORS="\n\n" }
                     {
-                        block=$0
-                        if (block ~ /(^|\n)[[:space:]]*Suites:[^\n]*(^|[[:space:]])([A-Za-z0-9_.-]+)(-updates|-backports)?([[:space:]]|$)/) {
-                            suites=block
-                            sub(/^.*(^|\n)[[:space:]]*Suites:[[:space:]]*/, "", suites)
-                            sub(/\n.*/, "", suites)
-                            if (suites !~ /(^|[[:space:]])[A-Za-z0-9_.-]+-security([[:space:]]|$)/ &&
-                                suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)|(^|[[:space:]])" codename "-updates([[:space:]]|$)") {
-                                gsub(/(^|\n)[[:space:]]*URIs:[[:space:]]*[^[:space:]]+/, "\\1URIs: " newurl, block)
+                        n=split($0, lines, "\n")
+                        suites=""
+                        for (i=1; i<=n; i++) {
+                            if (lines[i] ~ /^[[:space:]]*Suites:[[:space:]]*/) {
+                                suites=lines[i]
+                                sub(/^[[:space:]]*Suites:[[:space:]]*/, "", suites)
+                                break
                             }
+                        }
+                        ismain = (suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)" || suites ~ "(^|[[:space:]])" codename "-updates([[:space:]]|$)")
+                        if (ismain && suites !~ "(^|[[:space:]])" codename "-security([[:space:]]|$)") {
+                            for (i=1; i<=n; i++) {
+                                if (lines[i] ~ /^[[:space:]]*URIs:[[:space:]]*/) lines[i]="URIs: " newurl
+                            }
+                        }
+                        block=""
+                        for (i=1; i<=n; i++) {
+                            if (i>1) block=block "\n"
+                            block=block lines[i]
                         }
                         print block
                     }
@@ -627,7 +638,6 @@ set_debian_mirror() {
     save_selected_mirror "$mirror"
     ok "Debian mirror changed to $mirror"
 }
-
 set_ubuntu_mirror() {
     local mirror="$1" file tmp
     mirror="${mirror%/}"
@@ -635,11 +645,9 @@ set_ubuntu_mirror() {
     while IFS= read -r -d '' file; do
         case "$file" in
             *.list)
-                # Only Ubuntu archive suites are changed here; security is
-                # configured independently below.
                 sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]#]+/ubuntu[^[:space:]#]*#${mirror}#g" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]#]+/ubuntu[^[:space:]#]*#${mirror}#g" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]#]+#${mirror}#g" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]#]+#${mirror}#g" \
                     "$file" || true
                 ;;
             *.sources)
@@ -647,15 +655,25 @@ set_ubuntu_mirror() {
                 awk -v newurl="$mirror" -v codename="$OS_CODENAME" '
                     BEGIN { RS=""; ORS="\n\n" }
                     {
-                        block=$0
-                        if (block ~ /(^|\n)[[:space:]]*Suites:[^\n]*/) {
-                            suites=block
-                            sub(/^.*(^|\n)[[:space:]]*Suites:[[:space:]]*/, "", suites)
-                            sub(/\n.*/, "", suites)
-                            if (suites !~ /(^|[[:space:]])[A-Za-z0-9_.-]+-security([[:space:]]|$)/ &&
-                                suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)|(^|[[:space:]])" codename "-updates([[:space:]]|$)") {
-                                gsub(/(^|\n)[[:space:]]*URIs:[[:space:]]*[^[:space:]]+/, "\\1URIs: " newurl, block)
+                        n=split($0, lines, "\n")
+                        suites=""
+                        for (i=1; i<=n; i++) {
+                            if (lines[i] ~ /^[[:space:]]*Suites:[[:space:]]*/) {
+                                suites=lines[i]
+                                sub(/^[[:space:]]*Suites:[[:space:]]*/, "", suites)
+                                break
                             }
+                        }
+                        ismain = (suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)" || suites ~ "(^|[[:space:]])" codename "-updates([[:space:]]|$)")
+                        if (ismain && suites !~ "(^|[[:space:]])" codename "-security([[:space:]]|$)") {
+                            for (i=1; i<=n; i++) {
+                                if (lines[i] ~ /^[[:space:]]*URIs:[[:space:]]*/) lines[i]="URIs: " newurl
+                            }
+                        }
+                        block=""
+                        for (i=1; i<=n; i++) {
+                            if (i>1) block=block "\n"
+                            block=block lines[i]
                         }
                         print block
                     }
@@ -667,7 +685,6 @@ set_ubuntu_mirror() {
     save_selected_mirror "$mirror"
     ok "Ubuntu mirror changed to $mirror"
 }
-
 # Configure security separately from the main archive. The user can keep the
 # official security service or use the selected mirror when it actually hosts
 # the matching security tree. If it does not, we automatically fall back to
@@ -922,59 +939,34 @@ configure_dns() {
         while true; do
             echo
             echo "  ${role} DNS"
-            if [[ -n "$default_ip" ]]; then
-                echo "    1) Current/default DNS     $default_ip"
-                echo "    2) Cloudflare              $([[ "$role" == "Primary" ]] && echo 1.1.1.1 || echo 1.0.0.1)"
-                echo "    3) Google                  $([[ "$role" == "Primary" ]] && echo 8.8.8.8 || echo 8.8.4.4)"
-                echo "    4) Quad9                   $([[ "$role" == "Primary" ]] && echo 9.9.9.9 || echo 149.112.112.112)"
-                echo "    5) AdGuard                 $([[ "$role" == "Primary" ]] && echo 94.140.14.14 || echo 94.140.15.15)"
-                echo "    6) Custom IPv4"
-            else
-                echo "    1) Cloudflare              $([[ "$role" == "Primary" ]] && echo 1.1.1.1 || echo 1.0.0.1)"
-                echo "    2) Google                  $([[ "$role" == "Primary" ]] && echo 8.8.8.8 || echo 8.8.4.4)"
-                echo "    3) Quad9                   $([[ "$role" == "Primary" ]] && echo 9.9.9.9 || echo 149.112.112.112)"
-                echo "    4) AdGuard                 $([[ "$role" == "Primary" ]] && echo 94.140.14.14 || echo 94.140.15.15)"
-                echo "    5) Custom IPv4"
-            fi
+            echo "    1) Current/default DNS     ${default_ip:-Not detected}"
+            echo "    2) Cloudflare              1.1.1.1"
+            echo "    3) Google                  8.8.8.8"
+            echo "    4) Quad9                   9.9.9.9"
+            echo "    5) AdGuard                 94.140.14.14"
+            echo "    6) Custom IPv4"
             echo "    S) Skip this stage"
             read -r -p "  Choice: " choice
 
-            if [[ -n "$default_ip" ]]; then
-                case "$choice" in
-                    1) value="$default_ip";;
-                    2) [[ "$role" == "Primary" ]] && value="1.1.1.1" || value="1.0.0.1";;
-                    3) [[ "$role" == "Primary" ]] && value="8.8.8.8" || value="8.8.4.4";;
-                    4) [[ "$role" == "Primary" ]] && value="9.9.9.9" || value="149.112.112.112";;
-                    5) [[ "$role" == "Primary" ]] && value="94.140.14.14" || value="94.140.15.15";;
-                    6)
-                        while true; do
-                            read -r -p "  ${role} DNS IPv4 (S=skip): " value
-                            if is_skip "$value"; then return 10; fi
-                            if valid_ipv4 "$value"; then break; fi
-                            warn "Invalid IPv4 address. Try again."
-                        done
-                        ;;
-                    [Ss]|[Ss][Kk][Ii][Pp]) return 10;;
-                    *) warn "Invalid choice. Enter 1-6 or S."; continue;;
-                esac
-            else
-                case "$choice" in
-                    1) [[ "$role" == "Primary" ]] && value="1.1.1.1" || value="1.0.0.1";;
-                    2) [[ "$role" == "Primary" ]] && value="8.8.8.8" || value="8.8.4.4";;
-                    3) [[ "$role" == "Primary" ]] && value="9.9.9.9" || value="149.112.112.112";;
-                    4) [[ "$role" == "Primary" ]] && value="94.140.14.14" || value="94.140.15.15";;
-                    5)
-                        while true; do
-                            read -r -p "  ${role} DNS IPv4 (S=skip): " value
-                            if is_skip "$value"; then return 10; fi
-                            if valid_ipv4 "$value"; then break; fi
-                            warn "Invalid IPv4 address. Try again."
-                        done
-                        ;;
-                    [Ss]|[Ss][Kk][Ii][Pp]) return 10;;
-                    *) warn "Invalid choice. Enter 1-5 or S."; continue;;
-                esac
-            fi
+            case "$choice" in
+                1)
+                    if [[ -n "$default_ip" ]]; then value="$default_ip"; else warn "No current/default DNS was detected."; continue; fi
+                    ;;
+                2) value="1.1.1.1";;
+                3) value="8.8.8.8";;
+                4) value="9.9.9.9";;
+                5) value="94.140.14.14";;
+                6)
+                    while true; do
+                        read -r -p "  ${role} DNS IPv4 (S=skip): " value
+                        if is_skip "$value"; then return 10; fi
+                        if valid_ipv4 "$value"; then break; fi
+                        warn "Invalid IPv4 address. Try again."
+                    done
+                    ;;
+                [Ss]|[Ss][Kk][Ii][Pp]) return 10;;
+                *) warn "Invalid choice. Enter 1-6 or S."; continue;;
+            esac
             SELECTED_DNS="$value"
             return 0
         done
