@@ -584,136 +584,142 @@ save_selected_mirror() {
 replace_urls_in_sources() {
     local old_pattern="$1" new_url="$2" file
     while IFS= read -r -d '' file; do
+        # This helper is intentionally limited to the exact URI pattern passed
+        # by the caller. It is used for security repositories only.
         sed -i -E "s#https?://$old_pattern#${new_url}#g" "$file" || true
     done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
 }
 
-set_debian_mirror() {
-    local mirror="$1" file tmp
-    mirror="${mirror%/}"
+# Return success when a source URI belongs to the operating system's archive,
+# rather than a third-party repository. The currently selected mirror is also
+# trusted here so a custom mirror can be changed on the next run.
+is_os_archive_uri() {
+    local uri="$1" distro="$2" selected="${SELECTED_MIRROR:-}"
+    uri="${uri%/}"; selected="${selected%/}"
+
+    [[ -n "$selected" && "$uri" == "$selected" ]] && return 0
+
+    if [[ "$distro" == "debian" ]]; then
+        [[ "$uri" =~ ^https?://(deb\.debian\.org/debian|ftp\.[^/]+\.debian\.org/debian|[A-Za-z0-9.-]+\.debian\.org/debian)$ ]] && return 0
+    else
+        [[ "$uri" =~ ^https?://(archive\.ubuntu\.com/ubuntu|[A-Za-z0-9.-]+\.archive\.ubuntu\.com/ubuntu)$ ]] && return 0
+    fi
+    return 1
+}
+
+# Change only the URIs field of valid OS Deb822 stanzas. No stanza is rebuilt:
+# all fields, comments and blank-line layout remain untouched. Third-party
+# .sources files are ignored unless their URI is the saved OS mirror.
+replace_os_sources_uris() {
+    local new_url="$1" distro="$2" file tmp
+    new_url="${new_url%/}"
 
     while IFS= read -r -d '' file; do
-        case "$file" in
-            *.list)
-                # Change ONLY the URI on Debian archive/release lines.
-                # Preserve suites, components, options and Signed-By exactly.
-                # Do not touch unrelated repositories (for example Docker).
-                sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; }" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; }" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    "$file" || true
-                ;;
-            *.sources)
-                # Deb822: modify ONLY the URIs field in matching non-security
-                # stanzas. Every other field is preserved byte-for-byte.
-                tmp="${file}.junk-main.$$"
-                awk -v newurl="$mirror" -v codename="$OS_CODENAME" '
-                    BEGIN { RS=""; ORS="\n\n" }
-                    {
-                        n=split($0, lines, "\n")
-                        suites=""
-                        for (i=1; i<=n; i++) {
-                            if (lines[i] ~ /^[[:space:]]*Suites:[[:space:]]*/) {
-                                suites=lines[i]
-                                sub(/^[[:space:]]*Suites:[[:space:]]*/, "", suites)
-                                break
-                            }
-                        }
-                        ismain = (suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)" || suites ~ "(^|[[:space:]])" codename "-updates([[:space:]]|$)")
-                        issecurity = (suites ~ "(^|[[:space:]])" codename "-security([[:space:]]|$)")
-                        if (ismain && !issecurity) {
-                            for (i=1; i<=n; i++) {
-                                if (lines[i] ~ /^[[:space:]]*URIs:[[:space:]]*/) lines[i]="URIs: " newurl
-                            }
-                        }
-                        for (i=1; i<=n; i++) print lines[i]
+        [[ "$file" == *.sources ]] || continue
+        tmp="${file}.junk-main.$$"
+
+        if perl -0pe '
+            my $new = $ENV{JUNK_NEW_URL};
+            my $distro = $ENV{JUNK_DISTRO};
+            my $selected = $ENV{JUNK_SELECTED};
+            s{(^|\n\n)(.*?)(?=\n\n|\z)}{
+                my ($prefix, $block) = ($1, $2);
+                my ($suite) = $block =~ /^Suites:[ \t]*(.*)$/m;
+                my ($uri)   = $block =~ /^URIs:[ \t]*(\S+)/m;
+                my $allowed = 0;
+                if (defined $suite && defined $uri) {
+                    my $is_main = ($suite =~ /(?:^|[ \t])\Q$ENV{JUNK_CODENAME}\E(?:[ \t]|$)/ ||
+                                   $suite =~ /(?:^|[ \t])\Q$ENV{JUNK_CODENAME}\E-updates(?:[ \t]|$)/);
+                    my $is_security = ($suite =~ /(?:^|[ \t])\Q$ENV{JUNK_CODENAME}\E-security(?:[ \t]|$)/);
+                    my $u = $uri; $u =~ s{/+$}{};
+                    my $sel = $selected // ""; $sel =~ s{/+$}{};
+                    if ($u eq $sel) {
+                        $allowed = 1;
+                    } elsif ($distro eq "debian") {
+                        $allowed = ($u =~ m{^https?://(?:deb\.debian\.org/debian|ftp\.[^/]+\.debian\.org/debian|[A-Za-z0-9.-]+\.debian\.org/debian)$});
+                    } else {
+                        $allowed = ($u =~ m{^https?://(?:archive\.ubuntu\.com/ubuntu|[A-Za-z0-9.-]+\.archive\.ubuntu\.com/ubuntu)$});
                     }
-                ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
-                ;;
-        esac
-    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+                    if ($is_main && !$is_security && $allowed) {
+                        $block =~ s{^URIs:[ \t]*\S+}{URIs: $new}m;
+                    }
+                }
+                $prefix . $block
+            }gsex;
+        ' "$file" > "$tmp"; then
+            mv "$tmp" "$file"
+        else
+            rm -f "$tmp"
+            warn "Could not safely update $file; leaving it unchanged."
+        fi
+    done < <(find /etc/apt -maxdepth 2 -type f -name '*.sources' -print0)
+}
+
+set_debian_mirror() {
+    local mirror="$1" file
+    mirror="${mirror%/}"
+
+    # Legacy one-line sources: match OS suites plus OS components, and never
+    # rewrite a third-party line merely because it contains the codename.
+    while IFS= read -r -d '' file; do
+        [[ "$file" == *.list ]] || continue
+        sed -i -E \
+            -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ { /signed-by=\/etc\/apt\/keyrings\// ! s#https?://[^[:space:]]+#${mirror}#; }" \
+            -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ { /signed-by=\/etc\/apt\/keyrings\// ! s#https?://[^[:space:]]+#${mirror}#; }" \
+            "$file" || true
+    done < <(find /etc/apt -maxdepth 2 -type f -name '*.list' -print0)
+
+    SELECTED_MIRROR="$mirror" \
+    JUNK_NEW_URL="$mirror" JUNK_DISTRO="debian" JUNK_SELECTED="${SELECTED_MIRROR:-}" JUNK_CODENAME="$OS_CODENAME" \
+    replace_os_sources_uris "$mirror" "debian"
 
     save_selected_mirror "$mirror"
     ok "Debian mirror changed to $mirror"
 }
 
 set_ubuntu_mirror() {
-    local mirror="$1" file tmp
+    local mirror="$1" file old_selected
     mirror="${mirror%/}"
+    old_selected="${SELECTED_MIRROR:-}"
 
     while IFS= read -r -d '' file; do
-        case "$file" in
-            *.list)
-                # Change ONLY the URI on Ubuntu archive/release lines.
-                # Preserve suites, components and repository options.
-                sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    "$file" || true
-                ;;
-            *.sources)
-                tmp="${file}.junk-main.$$"
-                awk -v newurl="$mirror" -v codename="$OS_CODENAME" '
-                    BEGIN { RS=""; ORS="\n\n" }
-                    {
-                        n=split($0, lines, "\n")
-                        suites=""
-                        for (i=1; i<=n; i++) {
-                            if (lines[i] ~ /^[[:space:]]*Suites:[[:space:]]*/) {
-                                suites=lines[i]
-                                sub(/^[[:space:]]*Suites:[[:space:]]*/, "", suites)
-                                break
-                            }
-                        }
-                        ismain = (suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)" || suites ~ "(^|[[:space:]])" codename "-updates([[:space:]]|$)")
-                        issecurity = (suites ~ "(^|[[:space:]])" codename "-security([[:space:]]|$)")
-                        if (ismain && !issecurity) {
-                            for (i=1; i<=n; i++) {
-                                if (lines[i] ~ /^[[:space:]]*URIs:[[:space:]]*/) lines[i]="URIs: " newurl
-                            }
-                        }
-                        for (i=1; i<=n; i++) print lines[i]
-                    }
-                ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
-                ;;
-        esac
-    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+        [[ "$file" == *.list ]] || continue
+        sed -i -E \
+            -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ { /signed-by=\/etc\/apt\/keyrings\// ! s#https?://[^[:space:]]+#${mirror}#; }" \
+            -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ { /signed-by=\/etc\/apt\/keyrings\// ! s#https?://[^[:space:]]+#${mirror}#; }" \
+            "$file" || true
+    done < <(find /etc/apt -maxdepth 2 -type f -name '*.list' -print0)
 
+    SELECTED_MIRROR="$old_selected" \
+    JUNK_NEW_URL="$mirror" JUNK_DISTRO="ubuntu" JUNK_SELECTED="$old_selected" JUNK_CODENAME="$OS_CODENAME" \
+    replace_os_sources_uris "$mirror" "ubuntu"
+
+    SELECTED_MIRROR="$mirror"
     save_selected_mirror "$mirror"
     ok "Ubuntu mirror changed to $mirror"
 }
 
-# Configure security separately from the main archive. The user can keep the
-# official security service or use the selected mirror when it actually hosts
-# the matching security tree. If it does not, we automatically fall back to
-# the official security service.
+# Configure security separately from the main archive. Only stanzas whose
+# Suites field names the current OS security suite are modified.
 replace_security_sources() {
     local new_url="$1" file tmp
     new_url="${new_url%/}"
     while IFS= read -r -d '' file; do
         case "$file" in
             *.list)
-                # One-line APT entries: only rewrite lines that actually target
-                # a security suite, never ordinary archive repositories.
-                sed -i -E "/(^|[[:space:]])[[:alnum:]_.:-]+-security([[:space:]]|$)/ s#https?://[^[:space:]#]+#${new_url}#g" "$file" || true
+                sed -i -E "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-security([[:space:]]|$)/ s#https?://[^[:space:]]+#${new_url}#" "$file" || true
                 ;;
             *.sources)
-                # Deb822 source stanzas: rewrite URI only inside stanzas whose
-                # Suites field contains a security suite.
                 tmp="${file}.junk-security.$$"
-                awk -v newurl="$new_url" '
-                    BEGIN { RS=""; ORS="\n\n" }
-                    {
-                        block=$0
-                        if (block ~ /(^|\n)[[:space:]]*Suites:[^\n]*-security([[:space:]]|$)/) {
-                            gsub(/(^|\n)[[:space:]]*URIs:[[:space:]]*[^[:space:]]+/, "\\1URIs: " newurl, block)
+                JUNK_NEW_URL="$new_url" JUNK_CODENAME="$OS_CODENAME" perl -0pe '
+                    s{(^|\n\n)(.*?)(?=\n\n|\z)}{
+                        my ($prefix, $block) = ($1, $2);
+                        my ($suite) = $block =~ /^Suites:[ \t]*(.*)$/m;
+                        if (defined $suite && $suite =~ /(?:^|[ \t])\Q$ENV{JUNK_CODENAME}\E-security(?:[ \t]|$)/) {
+                            $block =~ s{^URIs:[ \t]*\S+}{URIs: $ENV{JUNK_NEW_URL}}m;
                         }
-                        print block
-                    }
+                        $prefix . $block
+                    }gsex;
                 ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
                 ;;
         esac
