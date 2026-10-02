@@ -16,7 +16,6 @@ SWAP_FILE="/swapfile"
 BBR_CONF="/etc/sysctl.d/99-tcp-bbr.conf"
 IPV6_CONF="/etc/sysctl.d/99-disable-ipv6.conf"
 MODULES_CONF="/etc/modules-load.d/modules.conf"
-DNS_CONF="/etc/systemd/resolved.conf.d/99-junk-dns.conf"
 JUNK_CONF="/etc/junk-setup.conf"
 GEO_COUNTRY_CODE=""
 GEO_COUNTRY_NAME=""
@@ -563,11 +562,6 @@ add_country_mirrors() {
 }
 
 # ---------- Mirrors ----------
-backup_apt_sources() {
-    local stamp backup; stamp="$(date +%Y%m%d-%H%M%S)"; backup="/root/apt-sources-backup-$stamp"
-    mkdir -p "$backup"; cp -a /etc/apt/sources.list "$backup/" 2>/dev/null || true; cp -a /etc/apt/sources.list.d "$backup/" 2>/dev/null || true; echo "$backup"
-}
-
 # Download a real Packages index over IPv4 and report throughput in MB/s.
 # For Ubuntu, $repo is the archive base. For Debian, security uses a separate
 # /debian-security tree and is benchmarked separately when requested.
@@ -616,39 +610,83 @@ replace_urls_in_sources() {
 }
 
 set_debian_mirror() {
-    local mirror="$1" backup; mirror="${mirror%/}"; backup="$(backup_apt_sources)"
-    replace_urls_in_sources '([^[:space:]#]+\.)?debian\.org/debian' "$mirror"
-    replace_urls_in_sources 'archive\.debian\.petiak\.ir/debian' "$mirror"
-    replace_urls_in_sources 'repo\.mirror\.famaserver\.com/debian' "$mirror"
-    replace_urls_in_sources 'mirrors\.pardisco\.co/debian' "$mirror"
-    replace_urls_in_sources 'mirror\.arvancloud\.ir/debian' "$mirror"
-    replace_urls_in_sources 'mirror\.iranserver\.com/debian' "$mirror"
-    replace_urls_in_sources 'mirror\.aminidc\.com/debian' "$mirror"
-    replace_urls_in_sources 'debian\.parspack\.com/debian' "$mirror"
-    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/debian' "$mirror"
-    replace_urls_in_sources 'mirror-linux\.runflare\.com/debian' "$mirror"
-    save_selected_mirror "$mirror"; ok "Debian mirror changed to $mirror"; info "APT source backup: $backup"
+    local mirror="$1" file tmp
+    mirror="${mirror%/}"
+
+    # Rewrite only Debian archive entries for the current release/update
+    # suites. Security repositories are deliberately handled separately.
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            *.list)
+                sed -i -E \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]#]+/debian(/[^[:space:]#]*)?#${mirror}#g" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]#]+/debian(/[^[:space:]#]*)?#${mirror}#g" \
+                    "$file" || true
+                ;;
+            *.sources)
+                tmp="${file}.junk-main.$$"
+                awk -v newurl="$mirror" -v codename="$OS_CODENAME" '
+                    BEGIN { RS=""; ORS="\n\n" }
+                    {
+                        block=$0
+                        if (block ~ /(^|\n)[[:space:]]*Suites:[^\n]*(^|[[:space:]])([A-Za-z0-9_.-]+)(-updates|-backports)?([[:space:]]|$)/) {
+                            suites=block
+                            sub(/^.*(^|\n)[[:space:]]*Suites:[[:space:]]*/, "", suites)
+                            sub(/\n.*/, "", suites)
+                            if (suites !~ /(^|[[:space:]])[A-Za-z0-9_.-]+-security([[:space:]]|$)/ &&
+                                suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)|(^|[[:space:]])" codename "-updates([[:space:]]|$)") {
+                                gsub(/(^|\n)[[:space:]]*URIs:[[:space:]]*[^[:space:]]+/, "\\1URIs: " newurl, block)
+                            }
+                        }
+                        print block
+                    }
+                ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
+                ;;
+        esac
+    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+
+    save_selected_mirror "$mirror"
+    ok "Debian mirror changed to $mirror"
 }
 
 set_ubuntu_mirror() {
-    local mirror="$1" backup; mirror="${mirror%/}"; backup="$(backup_apt_sources)"
-    replace_urls_in_sources '([a-z]{2}\.)?archive\.ubuntu\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'ir\.archive\.ubuntu\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'archive\.ubuntu\.petiak\.ir/ubuntu' "$mirror"
-    replace_urls_in_sources 'mirrors\.pardisco\.co/ubuntu' "$mirror"
-    replace_urls_in_sources 'mirror\.arvancloud\.ir/ubuntu' "$mirror"
-    replace_urls_in_sources 'ir\.ubuntu\.sindad\.cloud/ubuntu' "$mirror"
-    replace_urls_in_sources 'mirror\.iranserver\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.pishgaman\.net/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.parsvds\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.mobinhost\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.hostiran\.ir/ubuntuarchive' "$mirror"
-    replace_urls_in_sources 'mirror\.faraso\.org/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.parspack\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/ubuntu' "$mirror"
-    replace_urls_in_sources 'mirror-linux\.runflare\.com/ubuntu' "$mirror"
-    save_selected_mirror "$mirror"; ok "Ubuntu mirror changed to $mirror"; info "APT source backup: $backup"
+    local mirror="$1" file tmp
+    mirror="${mirror%/}"
+
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            *.list)
+                # Only Ubuntu archive suites are changed here; security is
+                # configured independently below.
+                sed -i -E \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]#]+/ubuntu[^[:space:]#]*#${mirror}#g" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]#]+/ubuntu[^[:space:]#]*#${mirror}#g" \
+                    "$file" || true
+                ;;
+            *.sources)
+                tmp="${file}.junk-main.$$"
+                awk -v newurl="$mirror" -v codename="$OS_CODENAME" '
+                    BEGIN { RS=""; ORS="\n\n" }
+                    {
+                        block=$0
+                        if (block ~ /(^|\n)[[:space:]]*Suites:[^\n]*/) {
+                            suites=block
+                            sub(/^.*(^|\n)[[:space:]]*Suites:[[:space:]]*/, "", suites)
+                            sub(/\n.*/, "", suites)
+                            if (suites !~ /(^|[[:space:]])[A-Za-z0-9_.-]+-security([[:space:]]|$)/ &&
+                                suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)|(^|[[:space:]])" codename "-updates([[:space:]]|$)") {
+                                gsub(/(^|\n)[[:space:]]*URIs:[[:space:]]*[^[:space:]]+/, "\\1URIs: " newurl, block)
+                            }
+                        }
+                        print block
+                    }
+                ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
+                ;;
+        esac
+    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+
+    save_selected_mirror "$mirror"
+    ok "Ubuntu mirror changed to $mirror"
 }
 
 # Configure security separately from the main archive. The user can keep the
@@ -685,18 +723,17 @@ replace_security_sources() {
 }
 
 set_debian_security() {
-    local security_url="$1" backup="$2"
+    local security_url="$1"
     security_url="${security_url%/}"
     replace_security_sources "$security_url"
     SELECTED_SECURITY_MIRROR="$security_url"
     SECURITY_MODE="mirror"
     save_selected_mirror "${SELECTED_MIRROR:-https://deb.debian.org/debian}"
     ok "Debian security mirror changed to $security_url"
-    info "APT source backup: $backup"
 }
 
 set_ubuntu_security() {
-    local security_url="$1" backup="$2"
+    local security_url="$1"
     security_url="${security_url%/}"
     replace_security_sources "$security_url"
     replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
@@ -705,13 +742,11 @@ set_ubuntu_security() {
     SECURITY_MODE="mirror"
     save_selected_mirror "${SELECTED_MIRROR:-https://archive.ubuntu.com/ubuntu}"
     ok "Ubuntu security mirror changed to $security_url"
-    info "APT source backup: $backup"
 }
 
 configure_security_mirror() {
-    local base="$1" backup security_url speed arch answer
+    local base="$1" security_url speed arch answer
     arch="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
-    backup="$(backup_apt_sources)"
     echo -e "\n${CYAN}🔐 Security repository${NC}"
     if [[ "$OS_ID" == "debian" ]]; then
         echo "  1) Official Debian security"
@@ -725,7 +760,7 @@ configure_security_mirror() {
                         security_url="https://security.debian.org/debian-security"
                         replace_security_sources "$security_url"
                         SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
-                        save_selected_mirror "$base"; ok "Using official Debian security repository."; info "APT source backup: $backup"
+                        save_selected_mirror "$base"; ok "Using official Debian security repository."
                     else info "Skipping security repository configuration."; fi
                     return ;;
                 2)
@@ -738,7 +773,7 @@ configure_security_mirror() {
                     # security tree is accepted only if the benchmark succeeds.
                     if speed="$(mirror_test "$security_url" "$OS_CODENAME" "$arch" "$OS_ID" security)"; then
                         info "Selected mirror security repository: $security_url (${speed} MB/s)"
-                        set_debian_security "$security_url" "$backup"; return
+                        set_debian_security "$security_url"; return
                     fi
                     warn "Selected mirror does not provide a usable Debian security repository."
                     warn "Falling back to official Debian security."
@@ -761,7 +796,7 @@ configure_security_mirror() {
                         security_url="https://security.ubuntu.com/ubuntu"
                         replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
                         SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
-                        save_selected_mirror "$base"; ok "Using official Ubuntu security repository."; info "APT source backup: $backup"
+                        save_selected_mirror "$base"; ok "Using official Ubuntu security repository."
                     else info "Skipping security repository configuration."; fi
                     return ;;
                 2)
@@ -783,7 +818,7 @@ configure_security_mirror() {
                     fi
                     if [[ -n "$speed" ]]; then
                         info "Selected mirror security repository: $security_url (${speed} MB/s)"
-                        set_ubuntu_security "$security_url" "$backup"; return
+                        set_ubuntu_security "$security_url"; return
                     fi
                     warn "Selected mirror does not provide a usable Ubuntu security repository."
                     warn "Falling back to official Ubuntu security."
@@ -872,45 +907,101 @@ configure_mirror() {
 }
 
 # ---------- DNS ----------
+# Configure primary and secondary DNS providers independently.
 configure_dns() {
+    local DNS1="" DNS2="" dns_choice=""
+
+    valid_ipv4() {
+        local ip=$1 octet
+        [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+        IFS=. read -r -a octets <<< "$ip"
+        for octet in "${octets[@]}"; do
+            (( octet <= 255 )) || return 1
+        done
+    }
+
+    choose_dns() {
+        local role="$1" choice="" value=""
+        while true; do
+            echo
+            echo "  ${role} DNS"
+            echo "    1) Cloudflare       1.1.1.1"
+            echo "    2) Google           8.8.8.8"
+            echo "    3) Quad9            9.9.9.9"
+            echo "    4) AdGuard          94.140.14.14"
+            echo "    5) Cloudflare       1.0.0.1"
+            echo "    6) Google           8.8.4.4"
+            echo "    7) Quad9            149.112.112.112"
+            echo "    8) AdGuard          94.140.15.15"
+            echo "    9) Custom IPv4"
+            echo "    S) Skip this stage"
+            read -r -p "  Choice: " choice
+
+            case "$choice" in
+                1) value="1.1.1.1";;
+                2) value="8.8.8.8";;
+                3) value="9.9.9.9";;
+                4) value="94.140.14.14";;
+                5) value="1.0.0.1";;
+                6) value="8.8.4.4";;
+                7) value="149.112.112.112";;
+                8) value="94.140.15.15";;
+                9)
+                    while true; do
+                        read -r -p "  ${role} DNS IPv4 (S=skip): " value
+                        if is_skip "$value"; then return 10; fi
+                        if valid_ipv4 "$value"; then break; fi
+                        warn "Invalid IPv4 address. Try again."
+                    done
+                    ;;
+                [Ss]|[Ss][Kk][Ii][Pp]) return 10;;
+                *) warn "Invalid choice. Enter 1-9 or S."; continue;;
+            esac
+            printf '%s' "$value"
+            return 0
+        done
+    }
+
+    echo -e "\n${CYAN}🧭 DNS configuration${NC}"
+    get_dns
+    echo "Current DNS: $DNS_SERVERS"
+    echo "Primary and secondary DNS are selected independently."
+
+    local primary_result secondary_result
+    primary_result="$(choose_dns "Primary")"
+    if [[ $? -eq 10 ]]; then info "Skipping DNS configuration."; return; fi
+    DNS1="$primary_result"
+
     while true; do
-        echo -e "\n${CYAN}🧭 DNS configuration${NC}"; get_dns; echo "Current DNS: $DNS_SERVERS"
-        echo "  1) Cloudflare      1.1.1.1 / 1.0.0.1"
-        echo "  2) Google          8.8.8.8 / 8.8.4.4"
-        echo "  3) Quad9           9.9.9.9 / 149.112.112.112"
-        echo "  4) Keep current"
-        echo "  5) Custom"
-        echo "  S) Skip this stage"
-        read -r -p $'🔹 Choice [4]: ' dns_choice; dns_choice="${dns_choice:-4}"
-        case "$dns_choice" in
-            1) DNS1="1.1.1.1"; DNS2="1.0.0.1";;
-            2) DNS1="8.8.8.8"; DNS2="8.8.4.4";;
-            3) DNS1="9.9.9.9"; DNS2="149.112.112.112";;
-            4) info "Keeping current DNS."; return;;
-            [Ss]|[Ss][Kk][Ii][Pp]) info "Skipping DNS configuration."; return;;
-            5)
-                read -r -p "Primary DNS (S=skip): " DNS1
-                if is_skip "$DNS1"; then info "Skipping DNS configuration."; return; fi
-                read -r -p "Secondary DNS (optional): " DNS2
-                DNS2="${DNS2:-$DNS1}"
-                ;;
-            *) warn "Invalid choice. Enter 1-5 or S."; continue;;
-        esac
-        if systemctl is-active --quiet systemd-resolved 2>/dev/null && command -v resolvectl >/dev/null 2>&1; then
-            mkdir -p "$(dirname "$DNS_CONF")"
-            cat > "$DNS_CONF" <<DNS_EOF
+        secondary_result="$(choose_dns "Secondary")"
+        if [[ $? -eq 10 ]]; then info "Skipping DNS configuration."; return; fi
+        DNS2="$secondary_result"
+        if [[ "$DNS1" == "$DNS2" ]]; then
+            warn "Secondary DNS must be different from Primary DNS."
+            continue
+        fi
+        break
+    done
+
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null && command -v resolvectl >/dev/null 2>&1; then
+        if [[ -n "${DEFAULT_INTERFACE:-}" ]]; then
+            resolvectl dns "$DEFAULT_INTERFACE" "$DNS1" "$DNS2" 2>/dev/null || true
+        fi
+        mkdir -p /etc/systemd/resolved.conf.d
+        cat > /etc/systemd/resolved.conf.d/99-junk-dns.conf <<DNS_EOF
 [Resolve]
 DNS=$DNS1 $DNS2
-FallbackDNS=1.1.1.1 8.8.8.8
+DNSStubListener=yes
 DNS_EOF
-            systemctl restart systemd-resolved; ok "DNS configured through systemd-resolved."
-        else
-            local backup="/etc/resolv.conf.junk-backup-$(date +%Y%m%d-%H%M%S)"; cp -L /etc/resolv.conf "$backup" 2>/dev/null || true
-            rm -f /etc/resolv.conf; printf 'nameserver %s\nnameserver %s\n' "$DNS1" "$DNS2" > /etc/resolv.conf
-            ok "DNS configured in /etc/resolv.conf"; warn "NetworkManager/netplan may overwrite /etc/resolv.conf."; info "Backup: $backup"
-        fi
-        return
-    done
+        systemctl restart systemd-resolved
+    else
+        rm -f /etc/resolv.conf 2>/dev/null || true
+        printf 'nameserver %s\nnameserver %s\n' "$DNS1" "$DNS2" > /etc/resolv.conf
+        warn "NetworkManager/netplan may overwrite /etc/resolv.conf."
+    fi
+
+    ok "Primary DNS:   $DNS1"
+    ok "Secondary DNS: $DNS2"
 }
 
 # ---------- Time ----------
@@ -1005,9 +1096,9 @@ get_debian_target() {
     esac
 }
 prepare_debian_release_sources() {
-    local target="$1" mirror backup file
+    local target="$1" mirror file
     get_selected_mirror; mirror="${SELECTED_MIRROR:-https://deb.debian.org/debian}"; mirror="${mirror%/}"
-    backup="$(backup_apt_sources)"; info "APT sources backup: $backup"; mkdir -p /etc/apt/sources.list.d
+    mkdir -p /etc/apt/sources.list.d
     # Disable existing Debian archive source files; third-party sources remain for manual review.
     for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
         [[ -e "$file" ]] || continue; [[ "$file" == "/etc/apt/sources.list.d/junk-debian.sources" ]] && continue
