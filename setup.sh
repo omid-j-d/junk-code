@@ -595,15 +595,19 @@ set_debian_mirror() {
     while IFS= read -r -d '' file; do
         case "$file" in
             *.list)
-                # Replace the archive URI on normal Debian release/update lines.
+                # Change ONLY the URI on Debian archive/release lines.
+                # Preserve suites, components, options and Signed-By exactly.
+                # Do not touch unrelated repositories (for example Docker).
                 sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]#>]+#${mirror}#g" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]#>]+#${mirror}#g" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; /signed-by=/! s#^(deb(-src)?)[[:space:]]+#\1 [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp] #; }" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; /signed-by=/! s#^(deb(-src)?)[[:space:]]+#\1 [signed-by=/usr/share/keyrings/debian-archive-keyring.pgp] #; }" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
                     "$file" || true
                 ;;
             *.sources)
-                # Deb822 files are stanza based. Replace ONLY the URIs field in
-                # non-security stanzas containing the current release or updates.
+                # Deb822: modify ONLY the URIs field in matching non-security
+                # stanzas. Every other field is preserved byte-for-byte.
                 tmp="${file}.junk-main.$$"
                 awk -v newurl="$mirror" -v codename="$OS_CODENAME" '
                     BEGIN { RS=""; ORS="\n\n" }
@@ -618,17 +622,18 @@ set_debian_mirror() {
                             }
                         }
                         ismain = (suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)" || suites ~ "(^|[[:space:]])" codename "-updates([[:space:]]|$)")
-                        if (ismain && suites !~ "(^|[[:space:]])" codename "-security([[:space:]]|$)") {
+                        issecurity = (suites ~ "(^|[[:space:]])" codename "-security([[:space:]]|$)")
+                        if (ismain && !issecurity) {
+                            has_signed=0
                             for (i=1; i<=n; i++) {
+                                if (lines[i] ~ /^[[:space:]]*Signed-By:[[:space:]]*/) has_signed=1
                                 if (lines[i] ~ /^[[:space:]]*URIs:[[:space:]]*/) lines[i]="URIs: " newurl
                             }
+                            if (!has_signed) {
+                                lines[++n]="Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp"
+                            }
                         }
-                        block=""
-                        for (i=1; i<=n; i++) {
-                            if (i>1) block=block "\n"
-                            block=block lines[i]
-                        }
-                        print block
+                        for (i=1; i<=n; i++) print lines[i]
                     }
                 ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
                 ;;
@@ -638,6 +643,7 @@ set_debian_mirror() {
     save_selected_mirror "$mirror"
     ok "Debian mirror changed to $mirror"
 }
+
 set_ubuntu_mirror() {
     local mirror="$1" file tmp
     mirror="${mirror%/}"
@@ -645,9 +651,13 @@ set_ubuntu_mirror() {
     while IFS= read -r -d '' file; do
         case "$file" in
             *.list)
+                # Change ONLY the URI on Ubuntu archive/release lines.
+                # Preserve suites, components and repository options.
                 sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]#>]+#${mirror}#g" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+.*[[:space:]]${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]#>]+#${mirror}#g" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
                     "$file" || true
                 ;;
             *.sources)
@@ -665,17 +675,13 @@ set_ubuntu_mirror() {
                             }
                         }
                         ismain = (suites ~ "(^|[[:space:]])" codename "([[:space:]]|$)" || suites ~ "(^|[[:space:]])" codename "-updates([[:space:]]|$)")
-                        if (ismain && suites !~ "(^|[[:space:]])" codename "-security([[:space:]]|$)") {
+                        issecurity = (suites ~ "(^|[[:space:]])" codename "-security([[:space:]]|$)")
+                        if (ismain && !issecurity) {
                             for (i=1; i<=n; i++) {
                                 if (lines[i] ~ /^[[:space:]]*URIs:[[:space:]]*/) lines[i]="URIs: " newurl
                             }
                         }
-                        block=""
-                        for (i=1; i<=n; i++) {
-                            if (i>1) block=block "\n"
-                            block=block lines[i]
-                        }
-                        print block
+                        for (i=1; i<=n; i++) print lines[i]
                     }
                 ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
                 ;;
@@ -685,6 +691,7 @@ set_ubuntu_mirror() {
     save_selected_mirror "$mirror"
     ok "Ubuntu mirror changed to $mirror"
 }
+
 # Configure security separately from the main archive. The user can keep the
 # official security service or use the selected mirror when it actually hosts
 # the matching security tree. If it does not, we automatically fall back to
@@ -1105,69 +1112,6 @@ repair_debian_sources() {
     return 0
 }
 
-ensure_debian_archive_keyring() {
-    [[ "$OS_ID" == "debian" ]] || return 0
-
-    local keyring="/usr/share/keyrings/debian-archive-keyring.gpg"
-    local tmpdir="" f expected actual
-    local -a urls=(
-        "https://ftp-master.debian.org/keys/archive-key-13.asc"
-        "https://ftp-master.debian.org/keys/archive-key-13-security.asc"
-        "https://ftp-master.debian.org/keys/release-13.asc"
-    )
-    local -a expected_fps=(
-        "04B54C3CDCA79751B16BC6B5225629DF75B188BD"
-        "5E04A1E3223A19A20706E20F9904613D4CCE68C6"
-        "41587F7DB8C774BCCF131416762F67A0B2C39DE4"
-    )
-
-    # Debian 13/Trixie introduced new archive signing keys. If the installed
-    # keyring predates them, APT cannot authenticate trixie even though the
-    # repository itself is healthy. Bootstrap the public keys directly from
-    # Debian FTP-master; do not use APT here because APT is precisely what is
-    # blocked by the missing keys.
-    if [[ "$OS_CODENAME" != "trixie" ]]; then
-        ok "Debian archive keyring checked."
-        return 0
-    fi
-
-    command -v gpg >/dev/null 2>&1 || {
-        warn "gpg is not installed; cannot bootstrap Debian archive keys automatically."
-        return 0
-    }
-
-    tmpdir="$(mktemp -d /tmp/junk-debian-keys.XXXXXX)"
-    trap 'rm -rf "$tmpdir"' RETURN
-
-    for i in "${!urls[@]}"; do
-        f="$tmpdir/key-$i.asc"
-        if ! curl4 -fsSL --max-time 15 "${urls[$i]}" -o "$f"; then
-            warn "Could not download Debian archive key ${urls[$i]}"
-            return 0
-        fi
-
-        actual="$(gpg --show-keys --with-colons "$f" 2>/dev/null | awk -F: '$1=="fpr" {print toupper($10); exit}')"
-        if [[ "$actual" != "${expected_fps[$i]}" ]]; then
-            warn "Downloaded Debian key fingerprint did not match the expected fingerprint."
-            return 0
-        fi
-    done
-
-    mkdir -p "$(dirname "$keyring")"
-    touch "$keyring"
-    chmod 0644 "$keyring"
-
-    # Import into the existing keyring so old valid Debian keys remain present.
-    for f in "$tmpdir"/*.asc; do
-        if ! gpg --batch --yes --no-default-keyring --keyring "$keyring" --import "$f" >/dev/null 2>&1; then
-            warn "Could not import Debian archive key: $(basename "$f")"
-            return 0
-        fi
-    done
-
-    ok "Debian Trixie archive signing keys verified and installed."
-    return 0
-}
 
 # ---------- System updates / packages ----------
 update_system() {
@@ -1177,15 +1121,9 @@ update_system() {
         if is_skip "$answer"; then info "Skipping system update."; return; fi
         if [[ "$answer" =~ ^[Yy]$ ]]; then
             repair_debian_sources
-            ensure_debian_archive_keyring
             if ! apt4 update; then
-                if [[ "$OS_ID" == "debian" ]]; then
-                    warn "APT update failed; refreshing Debian archive keys and retrying once."
-                    ensure_debian_archive_keyring
-                    apt4 update || return 1
-                else
-                    return 1
-                fi
+                warn "APT update failed. No insecure GPG bypass will be attempted."
+                return 1
             fi
             apt4 upgrade -y
             ok "System packages updated."; return
