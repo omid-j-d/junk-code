@@ -599,10 +599,10 @@ set_debian_mirror() {
                 # Preserve suites, components, options and Signed-By exactly.
                 # Do not touch unrelated repositories (for example Docker).
                 sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; }" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; }" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; }" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ { s#https?://[^[:space:]]+#${mirror}#; }" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
                     "$file" || true
                 ;;
             *.sources)
@@ -649,10 +649,10 @@ set_ubuntu_mirror() {
                 # Change ONLY the URI on Ubuntu archive/release lines.
                 # Preserve suites, components and repository options.
                 sed -i -E \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
-                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
+                    -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+\[[^]]*\][[:space:]]+https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ s#https?://[^[:space:]]+#${mirror}#" \
                     "$file" || true
                 ;;
             *.sources)
