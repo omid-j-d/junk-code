@@ -368,7 +368,9 @@ discover_ubuntu_country_mirrors() {
 }
 
 add_country_mirrors() {
-    local -n _arr="$1" line host country_lines=()
+    local -n _arr="$1"
+    local line host
+    local -a country_lines=()
     if ! detect_public_country; then
         warn "Could not detect server country; skipping dynamic local mirrors."
         return 0
