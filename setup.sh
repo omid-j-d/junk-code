@@ -350,55 +350,65 @@ detect_public_country() {
 # Debian publishes the authoritative complete mirror list. Extract the
 # package mirrors belonging to the detected country from that live list.
 discover_debian_country_mirrors() {
-    local country="$1" html
+    local country="$1" html plain
     [[ -n "$country" ]] || return 0
+
     html="$(curl4 -fsSL --max-time 20 https://www.debian.org/mirror/list-full 2>/dev/null || true)"
     [[ -n "$html" ]] || return 0
 
-    # Debian's authoritative mirror page is HTML. We deliberately parse only
-    # the requested <h3> country section and pair each Site with the following
-    # Packages-over-HTTP path. No gawk-only features are used: Debian/Ubuntu
-    # commonly ship mawk as /usr/bin/awk.
-    printf '%s\n' "$html" | awk -v country="$country" '
+    # The Debian mirror page is HTML. Strip markup first, then parse the
+    # human-readable mirror records. This is deliberately done before looking
+    # for the country heading because the source contains anchors/attributes
+    # around the <h3> element which vary over time.
+    plain="$(printf '%s\n' "$html" | sed \
+        -e 's/<[^>]*>/ /g' \
+        -e 's/&#160;/ /g' \
+        -e 's/&nbsp;/ /g' \
+        -e 's/[[:space:]][[:space:]]*/ /g' | sed -E 's/^ +//; s/ +$//')"
+
+    printf '%s\n' "$plain" | awk -v country="$country" '
         BEGIN { in_country=0; site="" }
-        /<h3[^>]*>/ {
-            if ($0 ~ "<h3[^>]*>[[:space:]]*" country "[[:space:]]*</h3>") {
+
+        # Country headings are emitted as a single plain-text line after the
+        # HTML has been stripped.
+        $0 == country {
+            if (!in_country) {
                 in_country=1
                 next
             }
-            if (in_country) exit
         }
+
+        # The next country heading terminates the current section. The country
+        # list is known to contain headings before each mirror block; accepting
+        # an exact line here avoids matching hostnames or comments.
+        in_country && $0 ~ /^[A-Z][A-Za-z .,&()\x27-]+$/ && $0 != country {
+            # Only terminate if this looks like a country heading. We use the
+            # known country names from the Debian page to avoid treating a
+            # random prose line as a heading.
+            split("Argentina|Armenia|Australia|Austria|Azerbaijan|Bangladesh|Belarus|Belgium|Brazil|Bulgaria|Cambodia|Canada|Chile|China|Costa Rica|Croatia|Czech Republic|Denmark|Ecuador|Estonia|Finland|France|Georgia|Germany|Greece|Hong Kong|Hungary|Iceland|India|Indonesia|Iran|Ireland|Israel|Italy|Japan|Kazakhstan|Kenya|Korea|Kuwait|Latvia|Lithuania|Luxembourg|Malaysia|Morocco|Mexico|Netherlands|New Caledonia|New Zealand|Norway|Poland|Portugal|Puerto Rico|Romania|Russia|Saudi Arabia|Serbia|Singapore|Slovakia|South Africa|Spain|Sweden|Switzerland|Taiwan|Thailand|Turkey|Ukraine|United Kingdom|United States|Uruguay|Vietnam", countries, "|")
+            for (i in countries) if ($0 == countries[i]) exit
+        }
+
         !in_country { next }
-        {
-            line=$0
-            # Convert the relevant HTML line to plain text.
-            gsub(/<[^>]*>/, " ", line)
-            gsub(/[[:space:]]+/, " ", line)
-            sub(/^[[:space:]]+/, "", line)
-            sub(/[[:space:]]+$/, "", line)
 
-            if (line ~ /^Site:[[:space:]]*/) {
-                sub(/^Site:[[:space:]]*/, "", line)
-                site=line
-                next
-            }
-
-            if (site != "" && line ~ /^Packages over HTTP:[[:space:]]*/) {
-                sub(/^Packages over HTTP:[[:space:]]*/, "", line)
-                # The visible path is the archive path, e.g. /debian/ or
-                # /mirror/ftp.debian.org/debian/.
-                path=line
-                sub(/[[:space:]].*$/, "", path)
-                if (path !~ /^\//) path="/" path
-                print site "|" path
-                site=""
-            }
+        if ($0 ~ /^Site:[[:space:]]*/) {
+            site=$0
+            sub(/^Site:[[:space:]]*/, "", site)
+            next
         }
-    ' | while IFS='|' read -r host path; do
-        [[ -n "$host" ]] || continue
-        [[ -n "$path" ]] || path="/debian/"
-        printf 'Local - %s|https://%s%s\n' "$host" "${host%/}" "${path#/}"
-    done
+
+        if (site != "" && $0 ~ /^Packages over HTTP:[[:space:]]*/) {
+            path=$0
+            sub(/^Packages over HTTP:[[:space:]]*/, "", path)
+            # Strip trailing metadata and punctuation introduced by the HTML
+            # conversion, retaining only the archive path.
+            sub(/[[:space:]]+.*$/, "", path)
+            gsub(/[[:space:]]/, "", path)
+            if (path !~ /^\//) path="/" path
+            print site "|https://" site path
+            site=""
+        }
+    '
 }
 
 # Ubuntu exposes the best official archive mirrors for a country through
