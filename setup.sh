@@ -581,149 +581,180 @@ save_selected_mirror() {
     printf 'JUNK_SECURITY_MODE=%q\n' "${SECURITY_MODE:-official}" >> "$JUNK_CONF"
 }
 
-replace_urls_in_sources() {
-    local old_pattern="$1" new_url="$2" file
-    while IFS= read -r -d '' file; do
-        # This helper is intentionally limited to the exact URI pattern passed
-        # by the caller. It is used for security repositories only.
-        sed -i -E "s#https?://$old_pattern#${new_url}#g" "$file" || true
-    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+# ---------- APT source ownership / mirror rewriting ----------
+# A source is considered an OS source from its APT semantics, not from a
+# hostname whitelist.  This is deliberately conservative:
+#   * suite must be this OS release (or its -updates/-security suite)
+#   * every component must belong to this OS
+#   * a third-party Signed-By keyring is never overwritten
+#   * only the URIs field is changed in Deb822 sources
+# This allows arbitrary custom mirrors such as mirror.netlen.com.tr while
+# preventing unrelated repositories such as Docker from being rewritten.
+apt_os_keyring() {
+    if [[ "$OS_ID" == "debian" ]]; then
+        printf '%s\n' '/usr/share/keyrings/debian-archive-keyring.gpg' '/usr/share/keyrings/debian-archive-keyring.pgp'
+    else
+        printf '%s\n' '/usr/share/keyrings/ubuntu-archive-keyring.gpg'
+    fi
 }
 
-# Return success when a source URI belongs to the operating system's archive,
-# rather than a third-party repository. The currently selected mirror is also
-# trusted here so a custom mirror can be changed on the next run.
-is_os_archive_uri() {
-    local uri="$1" distro="$2" selected="${SELECTED_MIRROR:-}"
-    uri="${uri%/}"; selected="${selected%/}"
-
-    [[ -n "$selected" && "$uri" == "$selected" ]] && return 0
-
-    if [[ "$distro" == "debian" ]]; then
-        [[ "$uri" =~ ^https?://(deb\.debian\.org/debian|ftp\.[^/]+\.debian\.org/debian|[A-Za-z0-9.-]+\.debian\.org/debian)$ ]] && return 0
+apt_allowed_component() {
+    local component="$1"
+    if [[ "$OS_ID" == "debian" ]]; then
+        case "$component" in main|contrib|non-free|non-free-firmware) return 0;; esac
     else
-        [[ "$uri" =~ ^https?://(archive\.ubuntu\.com/ubuntu|[A-Za-z0-9.-]+\.archive\.ubuntu\.com/ubuntu)$ ]] && return 0
+        case "$component" in main|universe|restricted|multiverse) return 0;; esac
     fi
     return 1
 }
 
-# Change only the URIs field of valid OS Deb822 stanzas. No stanza is rebuilt:
-# all fields, comments and blank-line layout remain untouched. Third-party
-# .sources files are ignored unless their URI is the saved OS mirror.
-replace_os_sources_uris() {
-    local new_url="$1" distro="$2" file tmp
-    new_url="${new_url%/}"
-
-    while IFS= read -r -d '' file; do
-        [[ "$file" == *.sources ]] || continue
-        tmp="${file}.junk-main.$$"
-
-        if perl -0pe '
-            my $new = $ENV{JUNK_NEW_URL};
-            my $distro = $ENV{JUNK_DISTRO};
-            my $selected = $ENV{JUNK_SELECTED};
-            s{(^|\n\n)(.*?)(?=\n\n|\z)}{
-                my ($prefix, $block) = ($1, $2);
-                my ($suite) = $block =~ /^Suites:[ \t]*(.*)$/m;
-                my ($uri)   = $block =~ /^URIs:[ \t]*(\S+)/m;
-                my $allowed = 0;
-                if (defined $suite && defined $uri) {
-                    my $is_main = ($suite =~ /(?:^|[ \t])\Q$ENV{JUNK_CODENAME}\E(?:[ \t]|$)/ ||
-                                   $suite =~ /(?:^|[ \t])\Q$ENV{JUNK_CODENAME}\E-updates(?:[ \t]|$)/);
-                    my $is_security = ($suite =~ /(?:^|[ \t])\Q$ENV{JUNK_CODENAME}\E-security(?:[ \t]|$)/);
-                    my $u = $uri; $u =~ s{/+$}{};
-                    my $sel = $selected // ""; $sel =~ s{/+$}{};
-                    if ($u eq $sel) {
-                        $allowed = 1;
-                    } elsif ($distro eq "debian") {
-                        $allowed = ($u =~ m{^https?://(?:deb\.debian\.org/debian|ftp\.[^/]+\.debian\.org/debian|[A-Za-z0-9.-]+\.debian\.org/debian)$});
-                    } else {
-                        $allowed = ($u =~ m{^https?://(?:archive\.ubuntu\.com/ubuntu|[A-Za-z0-9.-]+\.archive\.ubuntu\.com/ubuntu)$});
-                    }
-                    if ($is_main && !$is_security && $allowed) {
-                        $block =~ s{^URIs:[ \t]*\S+}{URIs: $new}m;
-                    }
-                }
-                $prefix . $block
-            }gsex;
-        ' "$file" > "$tmp"; then
-            mv "$tmp" "$file"
-        else
-            rm -f "$tmp"
-            warn "Could not safely update $file; leaving it unchanged."
+apt_os_signed_by() {
+    local value="$1" key
+    [[ -z "$value" ]] && return 0
+    # Deb822 Signed-By may contain whitespace-separated paths.  A repository
+    # using any other keyring is third-party and must not be rewritten.
+    value="${value//,/ }"
+    for key in $value; do
+        [[ -z "$key" ]] && continue
+        if ! apt_os_keyring | grep -Fxq -- "$key"; then
+            return 1
         fi
-    done < <(find /etc/apt -maxdepth 2 -type f -name '*.sources' -print0)
+    done
+    return 0
+}
+
+apt_list_os_line() {
+    # Usage: apt_list_os_line <line> <kind:main|security>
+    local line="$1" kind="$2" rest opt signed_by suite component i
+    local -a fields=()
+    [[ "$line" =~ ^[[:space:]]*(deb|deb-src)[[:space:]]+ ]] || return 1
+    rest="${line#*deb}"; rest="${rest#* }"
+    if [[ "$rest" == \[* ]]; then
+        opt="${rest%%]*}"; opt="${opt#*[}"
+        rest="${rest#*] }"
+        if [[ "$opt" =~ (^|[[:space:]])signed-by=([^[:space:]]+) ]]; then
+            signed_by="${BASH_REMATCH[2]}"
+            apt_os_signed_by "$signed_by" || return 1
+        fi
+    fi
+    read -r -a fields <<< "$rest"
+    ((${#fields[@]} >= 3)) || return 1
+    suite="${fields[1]}"
+    if [[ "$kind" == main ]]; then
+        [[ "$suite" == "$OS_CODENAME" || "$suite" == "$OS_CODENAME-updates" ]] || return 1
+    else
+        [[ "$suite" == "$OS_CODENAME-security" ]] || return 1
+    fi
+    for ((i=2; i<${#fields[@]}; i++)); do
+        component="${fields[$i]}"
+        [[ "$component" == \#* ]] && break
+        apt_allowed_component "$component" || return 1
+    done
+    return 0
+}
+
+apt_rewrite_list_file() {
+    local file="$1" newurl="$2" kind="$3" tmp line
+    tmp="${file}.junk-mirror.$$"
+    : > "$tmp"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if apt_list_os_line "$line" "$kind"; then
+            # Replace exactly the repository URI, leaving options/suite/
+            # components/comments untouched.
+            line="$(printf '%s\n' "$line" | sed -E "0,/https?:\/\/[^[:space:]]+/s#https?:\/\/[^[:space:]]+#${newurl}#")"
+        fi
+        printf '%s\n' "$line" >> "$tmp"
+    done < "$file"
+    mv "$tmp" "$file"
+}
+
+apt_sources_stanza_owned() {
+    # stdin: one complete Deb822 stanza; arg1=main|security
+    local kind="$1" stanza suites components signed_by component
+    stanza="$(cat)"
+    suites="$(awk '/^[[:space:]]*Suites:[[:space:]]*/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<< "$stanza")"
+    components="$(awk '/^[[:space:]]*Components:[[:space:]]*/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<< "$stanza")"
+    signed_by="$(awk '/^[[:space:]]*Signed-By:[[:space:]]*/ {sub(/^[^:]*:[[:space:]]*/, ""); print; exit}' <<< "$stanza")"
+
+    if [[ "$kind" == main ]]; then
+        grep -Eq "(^|[[:space:]])${OS_CODENAME}(-updates)?([[:space:]]|$)" <<< "$suites" || return 1
+        if grep -Eq "(^|[[:space:]])${OS_CODENAME}-security([[:space:]]|$)" <<< "$suites"; then
+            return 1
+        fi
+    else
+        grep -Eq "(^|[[:space:]])${OS_CODENAME}-security([[:space:]]|$)" <<< "$suites" || return 1
+        if grep -Eq "(^|[[:space:]])${OS_CODENAME}(-updates)?([[:space:]]|$)" <<< "$suites"; then
+            return 1
+        fi
+    fi
+
+    [[ -n "$components" ]] || return 1
+    for component in $components; do
+        apt_allowed_component "$component" || return 1
+    done
+    apt_os_signed_by "$signed_by"
+}
+
+apt_rewrite_sources_file() {
+    local file="$1" newurl="$2" kind="$3" tmp stanza line
+    tmp="${file}.junk-mirror.$$"
+    : > "$tmp"
+    stanza=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ -z "$line" ]]; then
+            if [[ -n "$stanza" ]]; then
+                if printf '%s\n' "$stanza" | apt_sources_stanza_owned "$kind"; then
+                    stanza="$(printf '%s\n' "$stanza" | sed -E "s#^([[:space:]]*URIs:[[:space:]]*).*\$#\\1${newurl}#m")"
+                fi
+                printf '%s\n\n' "$stanza" >> "$tmp"
+                stanza=""
+            else
+                printf '\n' >> "$tmp"
+            fi
+        else
+            if [[ -n "$stanza" ]]; then stanza+=$'\n'; fi
+            stanza+="$line"
+        fi
+    done < "$file"
+    if [[ -n "$stanza" ]]; then
+        if printf '%s\n' "$stanza" | apt_sources_stanza_owned "$kind"; then
+            stanza="$(printf '%s\n' "$stanza" | sed -E "s#^([[:space:]]*URIs:[[:space:]]*).*\$#\\1${newurl}#m")"
+        fi
+        printf '%s\n' "$stanza" >> "$tmp"
+    fi
+    mv "$tmp" "$file"
+}
+
+rewrite_os_sources() {
+    local newurl="$1" kind="$2" file
+    newurl="${newurl%/}"
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            *.list) apt_rewrite_list_file "$file" "$newurl" "$kind" ;;
+            *.sources) apt_rewrite_sources_file "$file" "$newurl" "$kind" ;;
+        esac
+    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
 }
 
 set_debian_mirror() {
-    local mirror="$1" file
+    local mirror="$1"
     mirror="${mirror%/}"
-
-    # Legacy one-line sources: match OS suites plus OS components, and never
-    # rewrite a third-party line merely because it contains the codename.
-    while IFS= read -r -d '' file; do
-        [[ "$file" == *.list ]] || continue
-        sed -i -E \
-            -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ { /signed-by=\/etc\/apt\/keyrings\// ! s#https?://[^[:space:]]+#${mirror}#; }" \
-            -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|contrib|non-free|non-free-firmware)([[:space:]]|$)/ { /signed-by=\/etc\/apt\/keyrings\// ! s#https?://[^[:space:]]+#${mirror}#; }" \
-            "$file" || true
-    done < <(find /etc/apt -maxdepth 2 -type f -name '*.list' -print0)
-
-    SELECTED_MIRROR="$mirror" \
-    JUNK_NEW_URL="$mirror" JUNK_DISTRO="debian" JUNK_SELECTED="${SELECTED_MIRROR:-}" JUNK_CODENAME="$OS_CODENAME" \
-    replace_os_sources_uris "$mirror" "debian"
-
+    rewrite_os_sources "$mirror" main
     save_selected_mirror "$mirror"
     ok "Debian mirror changed to $mirror"
 }
 
 set_ubuntu_mirror() {
-    local mirror="$1" file old_selected
+    local mirror="$1"
     mirror="${mirror%/}"
-    old_selected="${SELECTED_MIRROR:-}"
-
-    while IFS= read -r -d '' file; do
-        [[ "$file" == *.list ]] || continue
-        sed -i -E \
-            -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ { /signed-by=\/etc\/apt\/keyrings\// ! s#https?://[^[:space:]]+#${mirror}#; }" \
-            -e "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-updates([[:space:]]|$).*([[:space:]]|^)(main|universe|restricted|multiverse)([[:space:]]|$)/ { /signed-by=\/etc\/apt\/keyrings\// ! s#https?://[^[:space:]]+#${mirror}#; }" \
-            "$file" || true
-    done < <(find /etc/apt -maxdepth 2 -type f -name '*.list' -print0)
-
-    SELECTED_MIRROR="$old_selected" \
-    JUNK_NEW_URL="$mirror" JUNK_DISTRO="ubuntu" JUNK_SELECTED="$old_selected" JUNK_CODENAME="$OS_CODENAME" \
-    replace_os_sources_uris "$mirror" "ubuntu"
-
-    SELECTED_MIRROR="$mirror"
+    rewrite_os_sources "$mirror" main
     save_selected_mirror "$mirror"
     ok "Ubuntu mirror changed to $mirror"
 }
 
-# Configure security separately from the main archive. Only stanzas whose
-# Suites field names the current OS security suite are modified.
 replace_security_sources() {
-    local new_url="$1" file tmp
-    new_url="${new_url%/}"
-    while IFS= read -r -d '' file; do
-        case "$file" in
-            *.list)
-                sed -i -E "/^[[:space:]]*(deb|deb-src)[[:space:]]+(\[[^]]*\][[:space:]]+)?https?:\/\/[^[:space:]]+[[:space:]]+${OS_CODENAME}-security([[:space:]]|$)/ s#https?://[^[:space:]]+#${new_url}#" "$file" || true
-                ;;
-            *.sources)
-                tmp="${file}.junk-security.$$"
-                JUNK_NEW_URL="$new_url" JUNK_CODENAME="$OS_CODENAME" perl -0pe '
-                    s{(^|\n\n)(.*?)(?=\n\n|\z)}{
-                        my ($prefix, $block) = ($1, $2);
-                        my ($suite) = $block =~ /^Suites:[ \t]*(.*)$/m;
-                        if (defined $suite && $suite =~ /(?:^|[ \t])\Q$ENV{JUNK_CODENAME}\E-security(?:[ \t]|$)/) {
-                            $block =~ s{^URIs:[ \t]*\S+}{URIs: $ENV{JUNK_NEW_URL}}m;
-                        }
-                        $prefix . $block
-                    }gsex;
-                ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
-                ;;
-        esac
-    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+    local new_url="$1"
+    rewrite_os_sources "${new_url%/}" security
 }
 
 set_debian_security() {
@@ -740,8 +771,6 @@ set_ubuntu_security() {
     local security_url="$1"
     security_url="${security_url%/}"
     replace_security_sources "$security_url"
-    replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
-    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/ubuntu-security' "$security_url"
     SELECTED_SECURITY_MIRROR="$security_url"
     SECURITY_MODE="mirror"
     save_selected_mirror "${SELECTED_MIRROR:-https://archive.ubuntu.com/ubuntu}"
@@ -798,8 +827,7 @@ configure_security_mirror() {
                 1|[Ss]|[Ss][Kk][Ii][Pp])
                     if [[ "$answer" == "1" ]]; then
                         security_url="https://security.ubuntu.com/ubuntu"
-                        replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
-                        SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
+                                        SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
                         save_selected_mirror "$base"; ok "Using official Ubuntu security repository."
                     else info "Skipping security repository configuration."; fi
                     return ;;
@@ -827,8 +855,7 @@ configure_security_mirror() {
                     warn "Selected mirror does not provide a usable Ubuntu security repository."
                     warn "Falling back to official Ubuntu security."
                     security_url="https://security.ubuntu.com/ubuntu"
-                    replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
-                    SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
+                                SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
                     save_selected_mirror "$base"; ok "Using official Ubuntu security repository."; return ;;
                 *) warn "Invalid choice. Enter 1, 2 or S.";;
             esac
