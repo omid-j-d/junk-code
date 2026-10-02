@@ -26,6 +26,16 @@ info() { echo -e "${CYAN}ℹ $*${NC}"; }
 ok() { echo -e "${GREEN}✓ $*${NC}"; }
 warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
 
+# Force all network operations initiated by this script to use IPv4.
+# This does not disable IPv6 on the server.
+APT_IPV4_CONF="/etc/apt/apt.conf.d/99-junk-force-ipv4"
+curl4() { curl -4 "$@"; }
+apt4() { apt-get -o Acquire::ForceIPv4=true "$@"; }
+apt4_query() { apt -o Acquire::ForceIPv4=true "$@"; }
+ensure_ipv4_apt() {
+    printf '%s\n' 'Acquire::ForceIPv4 "true";' > "$APT_IPV4_CONF"
+}
+
 # Return success when the user wants to skip the current stage.
 # This keeps the script running instead of terminating on bad/optional input.
 is_skip() { [[ "${1:-}" =~ ^([Ss]|[Ss][Kk][Ii][Pp])$ ]]; }
@@ -91,7 +101,7 @@ get_package_status() {
     done
 }
 get_apt_status() {
-    APT_UPGRADABLE="$(apt list --upgradable 2>/dev/null | awk 'NR>1 && /\//{n++} END{print n+0}')"
+    APT_UPGRADABLE="$(apt4_query list --upgradable 2>/dev/null | awk 'NR>1 && /\//{n++} END{print n+0}')"
     [[ -f /var/run/reboot-required ]] && REBOOT_REQUIRED="yes" || REBOOT_REQUIRED="no"
 }
 get_docker_status() { command -v docker >/dev/null 2>&1 && DOCKER_STATUS="$(docker --version 2>/dev/null)" || DOCKER_STATUS="Not installed"; }
@@ -282,7 +292,7 @@ mirror_test() {
     # Test a real compressed Packages index instead of a tiny InRelease file.
     # This gives a useful approximation of download throughput from this VPS.
     path="dists/$codename/main/binary-$arch/Packages.xz"
-    speed="$(curl -4 -fsSL --max-time 15 --connect-timeout 5 -o /dev/null \
+    speed="$(curl4 -fsSL --max-time 15 --connect-timeout 5 -o /dev/null \
         -w '%{speed_download}' "$url/$path" 2>/dev/null || true)"
 
     [[ "$speed" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
@@ -477,20 +487,20 @@ configure_time() {
 
         # Try several providers because IP-geolocation APIs can rate-limit or block
         # requests from VPS/datacenter addresses.
-        public_ip="$(curl -4 -fsSL --max-time 5 https://api.ipify.org 2>/dev/null | tr -d '\r\n' || true)"
+        public_ip="$(curl4 -fsSL --max-time 5 https://api.ipify.org 2>/dev/null | tr -d '\r\n' || true)"
 
         # 1) ipapi.co
-        detected_tz="$(curl -4 -fsSL --max-time 7 https://ipapi.co/timezone/ 2>/dev/null | tr -d '\r\n' || true)"
+        detected_tz="$(curl4 -fsSL --max-time 7 https://ipapi.co/timezone/ 2>/dev/null | tr -d '\r\n' || true)"
         [[ "$detected_tz" == "Undefined" || "$detected_tz" == "null" ]] && detected_tz=""
 
         # 2) ipwho.is (JSON response)
         if [[ -z "$detected_tz" && -n "$public_ip" ]]; then
-            detected_tz="$(curl -4 -fsSL --max-time 7 "https://ipwho.is/$public_ip" 2>/dev/null | sed -n 's/.*"timezone"[[:space:]]*:[[:space:]]*{[^}]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true)"
+            detected_tz="$(curl4 -fsSL --max-time 7 "https://ipwho.is/$public_ip" 2>/dev/null | sed -n 's/.*"timezone"[[:space:]]*:[[:space:]]*{[^}]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true)"
         fi
 
         # 3) ipinfo.io (tokenless endpoint; may be unavailable in some regions)
         if [[ -z "$detected_tz" && -n "$public_ip" ]]; then
-            detected_tz="$(curl -4 -fsSL --max-time 7 "https://ipinfo.io/$public_ip/json" 2>/dev/null | sed -n 's/.*"timezone"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true)"
+            detected_tz="$(curl4 -fsSL --max-time 7 "https://ipinfo.io/$public_ip/json" 2>/dev/null | sed -n 's/.*"timezone"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true)"
         fi
 
         if [[ -n "$detected_tz" ]]; then
@@ -517,7 +527,7 @@ update_system() {
         echo -e "\n${CYAN}📦 System update${NC}"
         read -r -p $'🔹 Run apt update + upgrade? (Y/n, S=skip): ' answer; answer="${answer:-y}"
         if is_skip "$answer"; then info "Skipping system update."; return; fi
-        if [[ "$answer" =~ ^[Yy]$ ]]; then apt-get update; apt-get upgrade -y; ok "System packages updated."; return; fi
+        if [[ "$answer" =~ ^[Yy]$ ]]; then apt4 update; apt4 upgrade -y; ok "System packages updated."; return; fi
         if [[ "$answer" =~ ^[Nn]$ ]]; then info "Skipping system update."; return; fi
         warn "Invalid choice. Enter y, n or S."
     done
@@ -527,7 +537,7 @@ install_packages() {
         echo -e "\n${CYAN}🧰 Useful packages${NC}"
         read -r -p $'🔹 Install missing useful packages? (Y/n, S=skip): ' answer; answer="${answer:-y}"
         if is_skip "$answer"; then info "Skipping package installation."; return; fi
-        if [[ "$answer" =~ ^[Yy]$ ]]; then apt-get install -y git sudo curl socat vnstat nload speedtest-cli snapd lsof unzip zip htop mtr btop ufw p7zip-full ca-certificates gnupg screen; ok "Useful packages installed."; return; fi
+        if [[ "$answer" =~ ^[Yy]$ ]]; then apt4 install -y git sudo curl socat vnstat nload speedtest-cli snapd lsof unzip zip htop mtr btop ufw p7zip-full ca-certificates gnupg screen; ok "Useful packages installed."; return; fi
         if [[ "$answer" =~ ^[Nn]$ ]]; then info "Skipping package installation."; return; fi
         warn "Invalid choice. Enter y, n or S."
     done
@@ -540,7 +550,7 @@ configure_docker() {
         read -r -p $'🔹 Install Docker? (y/n) [default: y, S=skip]: ' install_docker; install_docker="${install_docker:-y}"
         if is_skip "$install_docker"; then info "Skipping Docker."; return; fi
         if [[ "$install_docker" =~ ^[Yy]$ ]]; then
-            if command -v docker >/dev/null 2>&1; then ok "Docker already installed: $(docker --version)"; else curl -fsSL https://get.docker.com | sh; systemctl enable --now docker; [[ -n "${SUDO_USER:-}" ]] && usermod -aG docker "$SUDO_USER"; ok "Docker installed: $(docker --version)"; fi
+            if command -v docker >/dev/null 2>&1; then ok "Docker already installed: $(docker --version)"; else curl4 -fsSL https://get.docker.com | sh; systemctl enable --now docker; [[ -n "${SUDO_USER:-}" ]] && usermod -aG docker "$SUDO_USER"; ok "Docker installed: $(docker --version)"; fi
             return
         elif [[ "$install_docker" =~ ^[Nn]$ ]]; then info "Skipping Docker."; return
         else warn "Invalid choice. Enter y, n or S."; fi
@@ -590,9 +600,9 @@ upgrade_debian_one_release() {
         if is_skip "$confirm"; then info "Upgrade skipped."; return; fi
         warn "Invalid confirmation. Type UPGRADE or S."
     done
-    apt-get update; apt-get upgrade -y; apt-get full-upgrade -y
+    apt4 update; apt4 upgrade -y; apt4 full-upgrade -y
     prepare_debian_release_sources "$target"
-    apt-get update; apt-get full-upgrade -y; apt-get autoremove -y
+    apt4 update; apt4 full-upgrade -y; apt4 autoremove -y
     ok "Debian $OS_CODENAME → $target upgrade step completed."
     warn "Reboot before running setup.sh again for the next major release."
 }
@@ -606,7 +616,7 @@ upgrade_release() {
         fi
         upgrade_debian_one_release "$target"
     else
-        if ! command -v do-release-upgrade >/dev/null 2>&1; then apt-get update; apt-get install -y update-manager-core; fi
+        if ! command -v do-release-upgrade >/dev/null 2>&1; then apt4 update; apt4 install -y update-manager-core; fi
         warn "Ubuntu release upgrades are handled by do-release-upgrade."
         warn "The upgrader manages the supported release path and may disable third-party repositories."
         while true; do
@@ -621,6 +631,7 @@ upgrade_release() {
 
 # ---------- Main ----------
 require_root
+ensure_ipv4_apt
 detect_os
 clear
 show_system_info
@@ -650,7 +661,7 @@ echo -e "\n${CYAN}🧹 Cleaning up...${NC}"
 while true; do
     read -r -p $'🔹 Run apt autoremove/clean? (Y/n, S=skip): ' cleanup; cleanup="${cleanup:-y}"
     if is_skip "$cleanup" || [[ "$cleanup" =~ ^[Nn]$ ]]; then info "Skipping cleanup."; break
-    elif [[ "$cleanup" =~ ^[Yy]$ ]]; then apt-get autoremove -y; apt-get clean; break
+    elif [[ "$cleanup" =~ ^[Yy]$ ]]; then apt4 autoremove -y; apt4 clean; break
     else warn "Invalid choice. Enter y, n or S."; fi
 done
 echo -e "\n${PURPLE}╔══════════════════════════════════════════════════════════╗"
