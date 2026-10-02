@@ -495,11 +495,19 @@ add_country_mirrors() {
             fi
         fi
 
-        # 3) Last resort: Debian's official global CDN.
+        # 3) If the country has no usable official mirror at all, show the
+        # curated mirrors we maintain, plus Debian's official primary CDN.
+        # These are a fallback menu only; they are never mixed into a country
+        # that already has usable official local mirrors.
         if ((${#country_lines[@]} == 0)); then
-            country_lines+=("Debian official primary CDN|https://deb.debian.org/debian")
+            country_lines+=(
+                "Liara|https://linux-mirror.liara.ir/repository/debian"
+                "ParsPack|https://debian.parspack.com/debian"
+                "Runflare|http://mirror-linux.runflare.com/debian"
+                "Debian official primary CDN|https://deb.debian.org/debian"
+            )
             warn "No usable official local Debian mirror was found for ${GEO_COUNTRY_NAME}."
-            info "Falling back to Debian's official primary CDN."
+            info "Showing curated fallback mirrors and Debian's official primary CDN."
         fi
     else
         # 1) Launchpad mirrors whose country exactly matches the detected country.
@@ -523,11 +531,17 @@ add_country_mirrors() {
             fi
         fi
 
-        # 3) Last resort: Ubuntu's official primary archive.
+        # 3) If no official local mirror exists, show the curated fallback list
+        # and Ubuntu's official primary archive.
         if ((${#country_lines[@]} == 0)); then
-            country_lines+=("Ubuntu official primary archive|https://archive.ubuntu.com/ubuntu")
+            country_lines+=(
+                "Liara|https://linux-mirror.liara.ir/repository/ubuntu"
+                "ParsPack|https://ubuntu.parspack.com/ubuntu"
+                "Runflare|http://mirror-linux.runflare.com/ubuntu"
+                "Ubuntu official primary archive|https://archive.ubuntu.com/ubuntu"
+            )
             warn "No usable official local Ubuntu mirror was found for ${GEO_COUNTRY_NAME}."
-            info "Falling back to Ubuntu's official primary archive."
+            info "Showing curated fallback mirrors and Ubuntu's official primary archive."
         fi
     fi
 
@@ -641,13 +655,39 @@ set_ubuntu_mirror() {
 # official security service or use the selected mirror when it actually hosts
 # the matching security tree. If it does not, we automatically fall back to
 # the official security service.
+replace_security_sources() {
+    local new_url="$1" file tmp
+    new_url="${new_url%/}"
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            *.list)
+                # One-line APT entries: only rewrite lines that actually target
+                # a security suite, never ordinary archive repositories.
+                sed -i -E "/(^|[[:space:]])[[:alnum:]_.:-]+-security([[:space:]]|$)/ s#https?://[^[:space:]#]+#${new_url}#g" "$file" || true
+                ;;
+            *.sources)
+                # Deb822 source stanzas: rewrite URI only inside stanzas whose
+                # Suites field contains a security suite.
+                tmp="${file}.junk-security.$$"
+                awk -v newurl="$new_url" '
+                    BEGIN { RS=""; ORS="\n\n" }
+                    {
+                        block=$0
+                        if (block ~ /(^|\n)[[:space:]]*Suites:[^\n]*-security([[:space:]]|$)/) {
+                            gsub(/(^|\n)[[:space:]]*URIs:[[:space:]]*[^[:space:]]+/, "\\1URIs: " newurl, block)
+                        }
+                        print block
+                    }
+                ' "$file" > "$tmp" && mv "$tmp" "$file" || rm -f "$tmp"
+                ;;
+        esac
+    done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
+}
+
 set_debian_security() {
     local security_url="$1" backup="$2"
     security_url="${security_url%/}"
-    replace_urls_in_sources 'security\.debian\.org/debian-security' "$security_url"
-    replace_urls_in_sources 'mirror-linux\.runflare\.com/debian-security' "$security_url"
-    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/debian-security' "$security_url"
-    replace_urls_in_sources 'debian\.parspack\.com/debian-security' "$security_url"
+    replace_security_sources "$security_url"
     SELECTED_SECURITY_MIRROR="$security_url"
     SECURITY_MODE="mirror"
     save_selected_mirror "${SELECTED_MIRROR:-https://deb.debian.org/debian}"
@@ -658,13 +698,9 @@ set_debian_security() {
 set_ubuntu_security() {
     local security_url="$1" backup="$2"
     security_url="${security_url%/}"
+    replace_security_sources "$security_url"
     replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$security_url"
     replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/ubuntu-security' "$security_url"
-    replace_urls_in_sources 'mirror-linux\.runflare\.com/ubuntu' "$security_url"
-    replace_urls_in_sources 'ubuntu\.parspack\.com/ubuntu' "$security_url"
-    replace_urls_in_sources 'linux-mirror\.liara\.ir/repository/ubuntu-security' "$security_url"
-    replace_urls_in_sources 'mirror-linux\.runflare\.com/ubuntu' "$security_url"
-    replace_urls_in_sources 'ubuntu\.parspack\.com/ubuntu' "$security_url"
     SELECTED_SECURITY_MIRROR="$security_url"
     SECURITY_MODE="mirror"
     save_selected_mirror "${SELECTED_MIRROR:-https://archive.ubuntu.com/ubuntu}"
@@ -687,18 +723,16 @@ configure_security_mirror() {
                 1|[Ss]|[Ss][Kk][Ii][Pp])
                     if [[ "$answer" == "1" ]]; then
                         security_url="https://security.debian.org/debian-security"
-                        replace_urls_in_sources 'security\.debian\.org/debian-security' "$security_url"
+                        replace_security_sources "$security_url"
                         SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
                         save_selected_mirror "$base"; ok "Using official Debian security repository."; info "APT source backup: $backup"
                     else info "Skipping security repository configuration."; fi
                     return ;;
                 2)
-                    if [[ "$base" == *"linux-mirror.liara.ir/repository/debian"* ]]; then
-                        security_url="https://linux-mirror.liara.ir/repository/debian-security"
-                    elif [[ "$base" == *"runflare.com/debian"* ]]; then
-                        security_url="${base%/}-security"
+                    if [[ "$base" == *"/debian" ]]; then
+                        security_url="${base%/debian}/debian-security"
                     else
-                        security_url="${base%/}"
+                        security_url="${base%/}/debian-security"
                     fi
                     # Liara follows repository/debian-security; ParsPack's
                     # security tree is accepted only if the benchmark succeeds.
@@ -709,7 +743,7 @@ configure_security_mirror() {
                     warn "Selected mirror does not provide a usable Debian security repository."
                     warn "Falling back to official Debian security."
                     security_url="https://security.debian.org/debian-security"
-                    replace_urls_in_sources 'security\.debian\.org/debian-security' "$security_url"
+                    replace_security_sources "$security_url"
                     SELECTED_SECURITY_MIRROR="$security_url"; SECURITY_MODE="official"
                     save_selected_mirror "$base"; ok "Using official Debian security repository."; return ;;
                 *) warn "Invalid choice. Enter 1, 2 or S.";;
