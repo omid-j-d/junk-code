@@ -1,5 +1,5 @@
 #!/bin/bash
-# ðŸš€ Junk Server Setup
+# 🚀 Junk Server Setup
 # Debian / Ubuntu
 set -Eeuo pipefail
 
@@ -21,11 +21,11 @@ JUNK_CONF="/etc/junk-setup.conf"
 
 # ---------- helpers ----------
 
-die() { echo -e "${RED}âœ— $*${NC}"; exit 1; }
-info() { echo -e "${CYAN}â„¹ $*${NC}"; }
-ok() { echo -e "${GREEN}âœ“ $*${NC}"; }
-warn() { echo -e "${YELLOW}âš  $*${NC}"; }
-trap 'echo -e "\n${RED}âœ— Setup stopped at line $LINENO.${NC}"' ERR
+die() { echo -e "${RED}✗ $*${NC}"; exit 1; }
+info() { echo -e "${CYAN}ℹ $*${NC}"; }
+ok() { echo -e "${GREEN}✓ $*${NC}"; }
+warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
+trap 'echo -e "\n${RED}✗ Setup stopped at line $LINENO.${NC}"' ERR
 
 require_root() { [[ "$EUID" -eq 0 ]] || die "Please run this script as root."; }
 
@@ -82,9 +82,9 @@ get_release_upgrade_info() {
     UPGRADE_PATH=""
     if [[ "$OS_ID" == "debian" ]]; then
         case "$OS_CODENAME" in
-            bullseye) UPGRADE_PATH="Debian 11 â†’ 12 (bookworm)" ;;
-            bookworm) UPGRADE_PATH="Debian 12 â†’ 13 (trixie)" ;;
-            trixie) UPGRADE_PATH="Debian 13 (trixie) â€” current stable" ;;
+            bullseye) UPGRADE_PATH="Debian 11 → 12 (bookworm)" ;;
+            bookworm) UPGRADE_PATH="Debian 12 → 13 (trixie)" ;;
+            trixie) UPGRADE_PATH="Debian 13 (trixie) — current stable" ;;
             *) UPGRADE_PATH="No automatic path configured" ;;
         esac
     else
@@ -104,9 +104,9 @@ get_release_upgrade_info() {
 show_system_info() {
     get_swap_info; get_cc; get_ipv6_status; get_timezone; get_dns; get_package_status; get_apt_status; get_docker_status; get_release_upgrade_info
     echo -e "${PURPLE}"
-    echo "â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—"
-    echo "â•‘                    SERVER INFORMATION                    â•‘"
-    echo "â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•"
+    echo "╔══════════════════════════════════════════════════════════╗"
+    echo "║                    SERVER INFORMATION                    ║"
+    echo "╚══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "${BOLD}System${NC}"
     echo "  OS              : $OS_NAME"
@@ -154,10 +154,10 @@ BBR_EOF
     sysctl --system >/dev/null
 }
 configure_bbr() {
-    echo -e "\n${CYAN}âš¡ TCP congestion control${NC}"
+    echo -e "\n${CYAN}⚡ TCP congestion control${NC}"
     get_cc; echo "Current: $CURRENT_CC | qdisc: $CURRENT_QDISC"
     echo "  1) BBR + FQ"; echo "  2) Cubic + FQ"; echo "  3) Keep current"
-    read -r -p $'ðŸ”¹ Choice [1]: ' cc_choice; cc_choice="${cc_choice:-1}"
+    read -r -p $'🔹 Choice [1]: ' cc_choice; cc_choice="${cc_choice:-1}"
     case "$cc_choice" in
         1) write_bbr_config bbr; ok "BBR + FQ enabled." ;;
         2) write_bbr_config cubic; ok "Cubic + FQ enabled." ;;
@@ -168,8 +168,8 @@ configure_bbr() {
 
 # ---------- IPv6 ----------
 configure_ipv6() {
-    echo -e "\n${CYAN}ðŸ”’ IPv6 settings${NC}"
-    read -r -p $'ðŸ”¹ Disable IPv6? (y/n) [default: n]: ' disable_ipv6; disable_ipv6="${disable_ipv6:-n}"
+    echo -e "\n${CYAN}🔒 IPv6 settings${NC}"
+    read -r -p $'🔹 Disable IPv6? (y/n) [default: n]: ' disable_ipv6; disable_ipv6="${disable_ipv6:-n}"
     if [[ "$disable_ipv6" =~ ^[Yy]$ ]]; then
         cat > "$IPV6_CONF" <<IPV6_EOF
 net.ipv6.conf.all.disable_ipv6 = 1
@@ -209,18 +209,18 @@ create_swap() {
     ok "Swap $size created and enabled."
 }
 configure_swap() {
-    echo -e "\n${CYAN}ðŸ’¾ Swap management${NC}"; get_swap_info
+    echo -e "\n${CYAN}💾 Swap management${NC}"; get_swap_info
     if [[ "$SWAP_ACTIVE" == "yes" ]]; then
         echo "Current swap: $SWAP_NAME ($SWAP_SIZE)"
         echo "  Enter = keep current | D/delete = remove | Number = GB | 512 = 512 MB"
         echo "  512M / 1G = explicit units"
-        read -r -p $'ðŸ”¹ Swap size/action: ' swap_input
+        read -r -p $'🔹 Swap size/action: ' swap_input
         if [[ -z "$swap_input" ]]; then ok "Keeping current swap."
         elif [[ "$swap_input" =~ ^[Dd](elete)?$ ]]; then remove_swap; ok "Existing swap removed."
         else remove_swap; create_swap "$swap_input"; fi
     else
         echo "No active swap found."
-        read -r -p $'ðŸ”¹ Create swap? Enter GB, 512 for 512 MB, or empty to skip: ' swap_input
+        read -r -p $'🔹 Create swap? Enter GB, 512 for 512 MB, or empty to skip: ' swap_input
         if [[ -z "$swap_input" ]]; then warn "Skipping swap creation."; else create_swap "$swap_input"; fi
     fi
     swapon --show || true
@@ -280,7 +280,7 @@ set_ubuntu_mirror() {
     save_selected_mirror "$mirror"; ok "Ubuntu mirror changed to $mirror"; info "APT source backup: $backup"
 }
 configure_mirror() {
-    echo -e "\n${CYAN}ðŸŒ APT mirror${NC}"; get_selected_mirror; [[ -n "$SELECTED_MIRROR" ]] && echo "Saved mirror: $SELECTED_MIRROR"
+    echo -e "\n${CYAN}🌐 APT mirror${NC}"; get_selected_mirror; [[ -n "$SELECTED_MIRROR" ]] && echo "Saved mirror: $SELECTED_MIRROR"
     local candidates
     if [[ "$OS_ID" == "debian" ]]; then
         candidates=(
@@ -313,7 +313,7 @@ configure_mirror() {
     echo "  0) Keep current"; local i=1 item name url
     for item in "${candidates[@]}"; do name="${item%%|*}"; url="${item#*|}"; echo "  $i) $name - $url"; ((i+=1)); done
     echo "  T) Test all mirrors"; echo "  A) Automatically select fastest working mirror"; echo "  C) Custom mirror URL"
-    read -r -p $'ðŸ”¹ Choice [0]: ' mirror_choice; mirror_choice="${mirror_choice:-0}"
+    read -r -p $'🔹 Choice [0]: ' mirror_choice; mirror_choice="${mirror_choice:-0}"
     if [[ "$mirror_choice" =~ ^[TtAa]$ ]]; then
         local best_url="" best_ms=999999 latency
         for item in "${candidates[@]}"; do
@@ -335,9 +335,9 @@ configure_mirror() {
 
 # ---------- DNS ----------
 configure_dns() {
-    echo -e "\n${CYAN}ðŸ§­ DNS configuration${NC}"; get_dns; echo "Current DNS: $DNS_SERVERS"
+    echo -e "\n${CYAN}🧭 DNS configuration${NC}"; get_dns; echo "Current DNS: $DNS_SERVERS"
     echo "  1) Cloudflare      1.1.1.1 / 1.0.0.1"; echo "  2) Google          8.8.8.8 / 8.8.4.4"; echo "  3) Quad9           9.9.9.9 / 149.112.112.112"; echo "  4) Keep current"; echo "  5) Custom"
-    read -r -p $'ðŸ”¹ Choice [4]: ' dns_choice; dns_choice="${dns_choice:-4}"
+    read -r -p $'🔹 Choice [4]: ' dns_choice; dns_choice="${dns_choice:-4}"
     case "$dns_choice" in
         1) DNS1="1.1.1.1"; DNS2="1.0.0.1";; 2) DNS1="8.8.8.8"; DNS2="8.8.4.4";; 3) DNS1="9.9.9.9"; DNS2="149.112.112.112";;
         4) info "Keeping current DNS."; return;;
@@ -361,8 +361,8 @@ DNS_EOF
 
 # ---------- Time ----------
 configure_time() {
-    echo -e "\n${CYAN}ðŸ•’ Time and timezone${NC}"; get_timezone; echo "Current timezone: $CURRENT_TZ"; echo "Current clock:    $(date)"
-    read -r -p $'ðŸ”¹ Detect timezone from public IP and fix clock? (Y/n): ' time_choice; time_choice="${time_choice:-y}"
+    echo -e "\n${CYAN}🕒 Time and timezone${NC}"; get_timezone; echo "Current timezone: $CURRENT_TZ"; echo "Current clock:    $(date)"
+    read -r -p $'🔹 Detect timezone from public IP and fix clock? (Y/n): ' time_choice; time_choice="${time_choice:-y}"
     if [[ "$time_choice" =~ ^[Yy]$ ]]; then
         local detected_tz="$(curl -4 -fsSL --max-time 7 https://ipapi.co/timezone/ 2>/dev/null | tr -d '\r\n' || true)"
         if [[ -n "$detected_tz" && "$detected_tz" != "Undefined" ]]; then
@@ -373,176 +373,12 @@ configure_time() {
 }
 
 # ---------- System updates / packages ----------
-update_system() { echo -e "\n${CYAN}ðŸ“¦ Updating package index and system...${NC}"; apt-get update; apt-get upgrade -y; ok "System packages updated."; }
-install_packages() { echo -e "\n${CYAN}ðŸ§° Installing useful tools...${NC}"; apt-get install -y git sudo curl socat vnstat nload speedtest-cli snapd lsof unzip zip htop mtr btop ufw p7zip-full ca-certificates gnupg screen; ok "Useful packages installed."; }
+update_system() { echo -e "\n${CYAN}📦 Updating package index and system...${NC}"; apt-get update; apt-get upgrade -y; ok "System packages updated."; }
+install_packages() { echo -e "\n${CYAN}🧰 Installing useful tools...${NC}"; apt-get install -y git sudo curl socat vnstat nload speedtest-cli snapd lsof unzip zip htop mtr btop ufw p7zip-full ca-certificates gnupg screen; ok "Useful packages installed."; }
 
 # ---------- Docker ----------
 configure_docker() {
-    echo -e "\n${CYAN}ðŸ³ Docker installation${NC}"; read -r -p $'ðŸ”¹ Install Docker? (y/n) [default: y]: ' install_docker; install_docker="${install_docker:-y}"
-    if [[ "$install_docker" =~ ^[Yy]$ ]]; then
-        if command -v docker >/dev/null 2>&1; then ok "Docker already installed: $(docker --version)"; else curl -fsSL https://get.docker.com | sh; systemctl enable --now docker; [[ -n "${SUDO_USER:-}" ]] && usermod -aG docker "$SUDO_USER"; ok "Docker installed: $(docker --version)"; fi
-    else info "Skipping Docker."; fi
-}
-
-# ---------- Release upgrade ----------
-get_debian_target() {
-    case "$OS_CODENAME" in
-        bullseye) echo "wapon --show || true
-}
-
-# ---------- Mirrors ----------
-backup_apt_sources() {
-    local stamp backup; stamp="$(date +%Y%m%d-%H%M%S)"; backup="/root/apt-sources-backup-$stamp"
-    mkdir -p "$backup"; cp -a /etc/apt/sources.list "$backup/" 2>/dev/null || true; cp -a /etc/apt/sources.list.d "$backup/" 2>/dev/null || true; echo "$backup"
-}
-mirror_test() {
-    local url="$1" codename="$2" start end
-    start="$(date +%s%3N)"
-    curl -4 -fsSL --max-time 5 -o /dev/null "$url/dists/$codename/InRelease" || return 1
-    end="$(date +%s%3N)"; echo $((end-start))
-}
-get_selected_mirror() {
-    SELECTED_MIRROR=""
-    if [[ -f "$JUNK_CONF" ]]; then
-        # shellcheck disable=SC1090
-        source "$JUNK_CONF" 2>/dev/null || true
-    fi
-    SELECTED_MIRROR="${JUNK_MIRROR:-}"
-}
-save_selected_mirror() { printf 'JUNK_MIRROR=%q\n' "$1" > "$JUNK_CONF"; }
-
-replace_urls_in_sources() {
-    local old_pattern="$1" new_url="$2" file
-    while IFS= read -r -d '' file; do sed -i -E "s#https?://$old_pattern#${new_url}#g" "$file" || true; done < <(find /etc/apt -maxdepth 2 -type f \( -name '*.list' -o -name '*.sources' \) -print0)
-}
-set_debian_mirror() {
-    local mirror="$1" backup; mirror="${mirror%/}"; backup="$(backup_apt_sources)"
-    replace_urls_in_sources '([^[:space:]#]+\.)?debian\.org/debian' "$mirror"
-    replace_urls_in_sources 'archive\.debian\.petiak\.ir/debian' "$mirror"
-    replace_urls_in_sources 'repo\.mirror\.famaserver\.com/debian' "$mirror"
-    replace_urls_in_sources 'mirrors\.pardisco\.co/debian' "$mirror"
-    replace_urls_in_sources 'mirror\.arvancloud\.ir/debian' "$mirror"
-    replace_urls_in_sources 'mirror\.iranserver\.com/debian' "$mirror"
-    replace_urls_in_sources 'mirror\.aminidc\.com/debian' "$mirror"
-    save_selected_mirror "$mirror"; ok "Debian mirror changed to $mirror"; info "APT source backup: $backup"
-}
-set_ubuntu_mirror() {
-    local mirror="$1" backup; mirror="${mirror%/}"; backup="$(backup_apt_sources)"
-    replace_urls_in_sources '([a-z]{2}\.)?archive\.ubuntu\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'security\.ubuntu\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'ir\.archive\.ubuntu\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'archive\.ubuntu\.petiak\.ir/ubuntu' "$mirror"
-    replace_urls_in_sources 'mirrors\.pardisco\.co/ubuntu' "$mirror"
-    replace_urls_in_sources 'mirror\.arvancloud\.ir/ubuntu' "$mirror"
-    replace_urls_in_sources 'ir\.ubuntu\.sindad\.cloud/ubuntu' "$mirror"
-    replace_urls_in_sources 'mirror\.iranserver\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.pishgaman\.net/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.parsvds\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.mobinhost\.com/ubuntu' "$mirror"
-    replace_urls_in_sources 'ubuntu\.hostiran\.ir/ubuntuarchive' "$mirror"
-    replace_urls_in_sources 'mirror\.faraso\.org/ubuntu' "$mirror"
-    save_selected_mirror "$mirror"; ok "Ubuntu mirror changed to $mirror"; info "APT source backup: $backup"
-}
-configure_mirror() {
-    echo -e "\n${CYAN}ðŸŒ APT mirror${NC}"; get_selected_mirror; [[ -n "$SELECTED_MIRROR" ]] && echo "Saved mirror: $SELECTED_MIRROR"
-    local candidates
-    if [[ "$OS_ID" == "debian" ]]; then
-        candidates=(
-            "Debian CDN|https://deb.debian.org/debian"
-            "Iran - Petiak (official Debian mirror)|https://archive.debian.petiak.ir/debian"
-            "Iran - FamaServer (official Debian mirror)|https://repo.mirror.famaserver.com/debian"
-            "Iran - Pardisco|https://mirrors.pardisco.co/debian"
-            "Iran - ArvanCloud|https://mirror.arvancloud.ir/debian"
-            "Netherlands - Leaseweb|https://mirror.nl.leaseweb.net/debian"
-            "Netherlands - UTwente|https://debian.snt.utwente.nl/debian"
-            "Germany - FAU|https://ftp.fau.de/debian"
-            "Germany - Debian country mirror|https://ftp.de.debian.org/debian"
-            "Kernel.org|https://mirrors.kernel.org/debian"
-        )
-    else
-        candidates=(
-            "Ubuntu primary|https://archive.ubuntu.com/ubuntu"
-            "Iran - Petiak|https://archive.ubuntu.petiak.ir/ubuntu"
-            "Iran - Pardisco|https://mirrors.pardisco.co/ubuntu"
-            "Iran - ArvanCloud|https://mirror.arvancloud.ir/ubuntu"
-            "Iran - Sindad|https://ir.ubuntu.sindad.cloud/ubuntu"
-            "Iran - Pishgaman|https://ubuntu.pishgaman.net/ubuntu"
-            "Iran - IranServer|https://mirror.iranserver.com/ubuntu"
-            "Iran - ParsVDS|https://ubuntu.parsvds.com/ubuntu"
-            "Iran - MobinHost|https://ubuntu.mobinhost.com/ubuntu"
-            "Netherlands|https://nl.archive.ubuntu.com/ubuntu"
-            "Germany|https://de.archive.ubuntu.com/ubuntu"
-        )
-    fi
-    echo "  0) Keep current"; local i=1 item name url
-    for item in "${candidates[@]}"; do name="${item%%|*}"; url="${item#*|}"; echo "  $i) $name - $url"; ((i+=1)); done
-    echo "  T) Test all mirrors"; echo "  A) Automatically select fastest working mirror"; echo "  C) Custom mirror URL"
-    read -r -p $'ðŸ”¹ Choice [0]: ' mirror_choice; mirror_choice="${mirror_choice:-0}"
-    if [[ "$mirror_choice" =~ ^[TtAa]$ ]]; then
-        local best_url="" best_ms=999999 latency
-        for item in "${candidates[@]}"; do
-            name="${item%%|*}"; url="${item#*|}"; printf "  %-42s " "$name"
-            if latency="$(mirror_test "$url" "$OS_CODENAME")"; then echo "${latency} ms"; if ((latency<best_ms)); then best_ms="$latency"; best_url="$url"; fi; else echo "unreachable"; fi
-        done
-        if [[ "$mirror_choice" =~ ^[Aa]$ ]]; then
-            [[ -n "$best_url" ]] || { warn "No working mirror found."; return; }
-            info "Fastest working mirror: $best_url (${best_ms} ms)"
-            [[ "$OS_ID" == "debian" ]] && set_debian_mirror "$best_url" || set_ubuntu_mirror "$best_url"
-        else read -r -p "Press Enter to continue..." _; fi
-        return
-    fi
-    if [[ "$mirror_choice" =~ ^[Cc]$ ]]; then read -r -p "Custom mirror base URL: " url; [[ -n "$url" ]] || return; url="${url%/}"
-    elif [[ "$mirror_choice" =~ ^[0-9]+$ ]] && ((mirror_choice>=1 && mirror_choice<=${#candidates[@]})); then item="${candidates[$((mirror_choice-1))]}"; url="${item#*|}"
-    else return; fi
-    [[ "$OS_ID" == "debian" ]] && set_debian_mirror "$url" || set_ubuntu_mirror "$url"
-}
-
-# ---------- DNS ----------
-configure_dns() {
-    echo -e "\n${CYAN}ðŸ§­ DNS configuration${NC}"; get_dns; echo "Current DNS: $DNS_SERVERS"
-    echo "  1) Cloudflare      1.1.1.1 / 1.0.0.1"; echo "  2) Google          8.8.8.8 / 8.8.4.4"; echo "  3) Quad9           9.9.9.9 / 149.112.112.112"; echo "  4) Keep current"; echo "  5) Custom"
-    read -r -p $'ðŸ”¹ Choice [4]: ' dns_choice; dns_choice="${dns_choice:-4}"
-    case "$dns_choice" in
-        1) DNS1="1.1.1.1"; DNS2="1.0.0.1";; 2) DNS1="8.8.8.8"; DNS2="8.8.4.4";; 3) DNS1="9.9.9.9"; DNS2="149.112.112.112";;
-        4) info "Keeping current DNS."; return;;
-        5) read -r -p "Primary DNS: " DNS1; read -r -p "Secondary DNS: " DNS2; [[ -n "$DNS1" ]] || return;;
-        *) warn "Invalid choice."; return;;
-    esac
-    if systemctl is-active --quiet systemd-resolved 2>/dev/null && command -v resolvectl >/dev/null 2>&1; then
-        mkdir -p "$(dirname "$DNS_CONF")"
-        cat > "$DNS_CONF" <<DNS_EOF
-[Resolve]
-DNS=$DNS1 $DNS2
-FallbackDNS=1.1.1.1 8.8.8.8
-DNS_EOF
-        systemctl restart systemd-resolved; ok "DNS configured through systemd-resolved."
-    else
-        local backup="/etc/resolv.conf.junk-backup-$(date +%Y%m%d-%H%M%S)"; cp -L /etc/resolv.conf "$backup" 2>/dev/null || true
-        rm -f /etc/resolv.conf; printf 'nameserver %s\nnameserver %s\n' "$DNS1" "$DNS2" > /etc/resolv.conf
-        ok "DNS configured in /etc/resolv.conf"; warn "NetworkManager/netplan may overwrite /etc/resolv.conf."; info "Backup: $backup"
-    fi
-}
-
-# ---------- Time ----------
-configure_time() {
-    echo -e "\n${CYAN}ðŸ•’ Time and timezone${NC}"; get_timezone; echo "Current timezone: $CURRENT_TZ"; echo "Current clock:    $(date)"
-    read -r -p $'ðŸ”¹ Detect timezone from public IP and fix clock? (Y/n): ' time_choice; time_choice="${time_choice:-y}"
-    if [[ "$time_choice" =~ ^[Yy]$ ]]; then
-        local detected_tz="$(curl -4 -fsSL --max-time 7 https://ipapi.co/timezone/ 2>/dev/null | tr -d '\r\n' || true)"
-        if [[ -n "$detected_tz" && "$detected_tz" != "Undefined" ]]; then
-            if timedatectl list-timezones | grep -qx "$detected_tz"; then timedatectl set-timezone "$detected_tz"; ok "Timezone set to $detected_tz based on public IP."; else warn "Detected timezone '$detected_tz' is not available."; fi
-        else warn "Could not detect timezone from public IP."; fi
-    fi
-    timedatectl set-ntp true 2>/dev/null || true; systemctl restart systemd-timesyncd 2>/dev/null || true; ok "Time synchronization requested."
-}
-
-# ---------- System updates / packages ----------
-update_system() { echo -e "\n${CYAN}ðŸ“¦ Updating package index and system...${NC}"; apt-get update; apt-get upgrade -y; ok "System packages updated."; }
-install_packages() { echo -e "\n${CYAN}ðŸ§° Installing useful tools...${NC}"; apt-get install -y git sudo curl socat vnstat nload speedtest-cli snapd lsof unzip zip htop mtr btop ufw p7zip-full ca-certificates gnupg screen; ok "Useful packages installed."; }
-
-# ---------- Docker ----------
-configure_docker() {
-    echo -e "\n${CYAN}ðŸ³ Docker installation${NC}"; read -r -p $'ðŸ”¹ Install Docker? (y/n) [default: y]: ' install_docker; install_docker="${install_docker:-y}"
+    echo -e "\n${CYAN}🐳 Docker installation${NC}"; read -r -p $'🔹 Install Docker? (y/n) [default: y]: ' install_docker; install_docker="${install_docker:-y}"
     if [[ "$install_docker" =~ ^[Yy]$ ]]; then
         if command -v docker >/dev/null 2>&1; then ok "Docker already installed: $(docker --version)"; else curl -fsSL https://get.docker.com | sh; systemctl enable --now docker; [[ -n "${SUDO_USER:-}" ]] && usermod -aG docker "$SUDO_USER"; ok "Docker installed: $(docker --version)"; fi
     else info "Skipping Docker."; fi
@@ -584,16 +420,16 @@ SRC_EOF
 }
 upgrade_debian_one_release() {
     local target="$1"
-    warn "This will upgrade Debian $OS_CODENAME â†’ $target."; warn "Only one Debian major release is upgraded per run."
+    warn "This will upgrade Debian $OS_CODENAME → $target."; warn "Only one Debian major release is upgraded per run."
     read -r -p "Type UPGRADE to continue: " confirm; [[ "$confirm" == "UPGRADE" ]] || { info "Upgrade cancelled."; return; }
     apt-get update; apt-get upgrade -y; apt-get full-upgrade -y
     prepare_debian_release_sources "$target"
     apt-get update; apt-get full-upgrade -y; apt-get autoremove -y
-    ok "Debian $OS_CODENAME â†’ $target upgrade step completed."
+    ok "Debian $OS_CODENAME → $target upgrade step completed."
     warn "Reboot before running setup.sh again for the next major release."
 }
 upgrade_release() {
-    echo -e "\n${CYAN}â¬†ï¸ Distribution release upgrade${NC}"; echo "This is separate from normal package upgrades."; echo
+    echo -e "\n${CYAN}⬆️ Distribution release upgrade${NC}"; echo "This is separate from normal package upgrades."; echo
     if [[ "$OS_ID" == "debian" ]]; then
         local target="$(get_debian_target)"
         if [[ -z "$target" ]]; then
@@ -616,7 +452,7 @@ detect_os
 clear
 show_system_info
 echo
-read -r -p $'ðŸ”¹ Continue with setup? (Y/n): ' continue_setup; continue_setup="${continue_setup:-y}"; [[ "$continue_setup" =~ ^[Yy]$ ]] || exit 0
+read -r -p $'🔹 Continue with setup? (Y/n): ' continue_setup; continue_setup="${continue_setup:-y}"; [[ "$continue_setup" =~ ^[Yy]$ ]] || exit 0
 configure_bbr
 configure_ipv6
 configure_swap
@@ -627,13 +463,13 @@ update_system
 install_packages
 configure_docker
 echo
-read -r -p $'ðŸ”¹ Check for a major OS upgrade? (y/N): ' do_upgrade
+read -r -p $'🔹 Check for a major OS upgrade? (y/N): ' do_upgrade
 if [[ "$do_upgrade" =~ ^[Yy]$ ]]; then upgrade_release; fi
 
-echo -e "\n${CYAN}ðŸ§¹ Cleaning up...${NC}"; apt-get autoremove -y; apt-get clean
-echo -e "\n${PURPLE}â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—"
-echo "â•‘                    ðŸŽ‰ Setup Complete!                   â•‘"
-echo "â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
+echo -e "\n${CYAN}🧹 Cleaning up...${NC}"; apt-get autoremove -y; apt-get clean
+echo -e "\n${PURPLE}╔══════════════════════════════════════════════════════════╗"
+echo "║                    🎉 Setup Complete!                   ║"
+echo "╚══════════════════════════════════════════════════════════╝${NC}"
 get_swap_info; get_cc; get_ipv6_status; get_timezone; get_dns; get_apt_status; get_docker_status
 echo -e "${BOLD}Final status:${NC}"
 echo "  OS              : $OS_NAME"
