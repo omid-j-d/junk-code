@@ -350,24 +350,54 @@ detect_public_country() {
 # Debian publishes the authoritative complete mirror list. Extract the
 # package mirrors belonging to the detected country from that live list.
 discover_debian_country_mirrors() {
-    local country="$1" html host
+    local country="$1" html
     [[ -n "$country" ]] || return 0
-    html="$(curl4 -fsSL --max-time 15 https://www.debian.org/mirror/list-full 2>/dev/null || true)"
+    html="$(curl4 -fsSL --max-time 20 https://www.debian.org/mirror/list-full 2>/dev/null || true)"
     [[ -n "$html" ]] || return 0
 
+    # Debian's authoritative mirror page is HTML. We deliberately parse only
+    # the requested <h3> country section and pair each Site with the following
+    # Packages-over-HTTP path. No gawk-only features are used: Debian/Ubuntu
+    # commonly ship mawk as /usr/bin/awk.
     printf '%s\n' "$html" | awk -v country="$country" '
-        BEGIN { found=0 }
-        $0 ~ "^### " country "[[:space:]]*$" { found=1; next }
-        found && /^### / { exit }
-        found && /Site: `/ {
-            line=$0
-            sub(/^.*Site: `/, "", line)
-            sub(/`.*/, "", line)
-            print line
+        BEGIN { in_country=0; site="" }
+        /<h3[^>]*>/ {
+            if ($0 ~ "<h3[^>]*>[[:space:]]*" country "[[:space:]]*</h3>") {
+                in_country=1
+                next
+            }
+            if (in_country) exit
         }
-    ' | while IFS= read -r host; do
+        !in_country { next }
+        {
+            line=$0
+            # Convert the relevant HTML line to plain text.
+            gsub(/<[^>]*>/, " ", line)
+            gsub(/[[:space:]]+/, " ", line)
+            sub(/^[[:space:]]+/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+
+            if (line ~ /^Site:[[:space:]]*/) {
+                sub(/^Site:[[:space:]]*/, "", line)
+                site=line
+                next
+            }
+
+            if (site != "" && line ~ /^Packages over HTTP:[[:space:]]*/) {
+                sub(/^Packages over HTTP:[[:space:]]*/, "", line)
+                # The visible path is the archive path, e.g. /debian/ or
+                # /mirror/ftp.debian.org/debian/.
+                path=line
+                sub(/[[:space:]].*$/, "", path)
+                if (path !~ /^\//) path="/" path
+                print site "|" path
+                site=""
+            }
+        }
+    ' | while IFS='|' read -r host path; do
         [[ -n "$host" ]] || continue
-        printf 'Local - %s|https://%s/debian\n' "$host" "$host"
+        [[ -n "$path" ]] || path="/debian/"
+        printf 'Local - %s|https://%s%s\n' "$host" "${host%/}" "${path#/}"
     done
 }
 
@@ -378,12 +408,12 @@ discover_ubuntu_country_mirrors() {
     local code="$1" country_url json url
     [[ -n "$code" ]] || return 0
     code="${code^^}"
-    country_url="https://api.launchpad.net/1.0/+countries/${code}"
+    country_url="https://api.launchpad.net/devel/+countries/${code}"
     json="$(curl4 -fsSL --max-time 15 --get \
         --data-urlencode "ws.op=getBestMirrorsForCountry" \
         --data-urlencode "country=${country_url}" \
         --data-urlencode "mirror_type=Archive" \
-        https://api.launchpad.net/1.0/ubuntu 2>/dev/null || true)"
+        https://api.launchpad.net/devel/ubuntu 2>/dev/null || true)"
 
     # Prefer HTTPS, fall back to HTTP when the mirror does not advertise HTTPS.
     local https_urls http_urls
