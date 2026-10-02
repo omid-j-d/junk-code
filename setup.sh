@@ -447,7 +447,7 @@ discover_ubuntu_country_mirrors() {
 
 add_country_mirrors() {
     local -n _arr="$1"
-    local line host item existing arch alias
+    local line host item existing arch alias duplicate
     local -a country_lines=()
 
     if ! detect_public_country; then
@@ -457,23 +457,8 @@ add_country_mirrors() {
     info "Detected public IP country: ${GEO_COUNTRY_NAME} (${GEO_COUNTRY_CODE})"
     arch="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 
-    # Iran is the requested curated exception.
-    if [[ "$GEO_COUNTRY_CODE" == "IR" ]]; then
-        if [[ "$OS_ID" == "debian" ]]; then
-            country_lines=(
-                "Iran - Liara|https://linux-mirror.liara.ir/repository/debian"
-                "Iran - ParsPack|https://debian.parspack.com/debian"
-                "Iran - Runflare|http://mirror-linux.runflare.com/debian"
-            )
-        else
-            country_lines=(
-                "Iran - Liara|https://linux-mirror.liara.ir/repository/ubuntu"
-                "Iran - ParsPack|https://ubuntu.parspack.com/ubuntu"
-                "Iran - Runflare|http://mirror-linux.runflare.com/ubuntu"
-            )
-        fi
-    elif [[ "$OS_ID" == "debian" ]]; then
-        # 1) Officially registered mirrors in the exact detected country.
+    # 1) Official mirrors registered in the exact detected country.
+    if [[ "$OS_ID" == "debian" ]]; then
         while IFS= read -r line; do
             [[ -n "$line" ]] || continue
             host="${line%%|*}"
@@ -482,34 +467,7 @@ add_country_mirrors() {
                 country_lines+=("${GEO_COUNTRY_NAME} - ${host}|${item}")
             fi
         done < <(discover_debian_country_mirrors "$GEO_COUNTRY_NAME")
-
-        # 2) If no registered mirror works, try Debian's official country alias.
-        if ((${#country_lines[@]} == 0)); then
-            if alias="$(debian_country_alias "$GEO_COUNTRY_CODE" 2>/dev/null)" &&
-               validate_debian_mirror "$alias" "$arch" "$OS_CODENAME"; then
-                country_lines+=("${GEO_COUNTRY_NAME} - Official Debian country mirror|${alias}")
-                ok "Using Debian's official country mirror alias for ${GEO_COUNTRY_NAME}."
-            else
-                info "No usable official Debian country mirror exists for ${GEO_COUNTRY_NAME}."
-            fi
-        fi
-
-        # 3) If the country has no usable official mirror at all, show the
-        # curated mirrors we maintain, plus Debian's official primary CDN.
-        # These are a fallback menu only; they are never mixed into a country
-        # that already has usable official local mirrors.
-        if ((${#country_lines[@]} == 0)); then
-            country_lines+=(
-                "Liara|https://linux-mirror.liara.ir/repository/debian"
-                "ParsPack|https://debian.parspack.com/debian"
-                "Runflare|http://mirror-linux.runflare.com/debian"
-                "Debian official primary CDN|https://deb.debian.org/debian"
-            )
-            warn "No usable official local Debian mirror was found for ${GEO_COUNTRY_NAME}."
-            info "Showing curated fallback mirrors and Debian's official primary CDN."
-        fi
     else
-        # 1) Launchpad mirrors whose country exactly matches the detected country.
         while IFS= read -r line; do
             [[ -n "$line" ]] || continue
             host="${line%%|*}"
@@ -518,36 +476,53 @@ add_country_mirrors() {
                 country_lines+=("${GEO_COUNTRY_NAME} - ${host}|${item}")
             fi
         done < <(discover_ubuntu_country_mirrors "$GEO_COUNTRY_CODE")
+    fi
 
-        # 2) Ubuntu's official country archive, e.g. de.archive.ubuntu.com.
-        if ((${#country_lines[@]} == 0)); then
-            if alias="$(ubuntu_country_alias "$GEO_COUNTRY_CODE" 2>/dev/null)" &&
-               curl4 -fsSI --max-time 8 --connect-timeout 4 "$alias/dists/$OS_CODENAME/Release" >/dev/null 2>&1; then
-                country_lines+=("${GEO_COUNTRY_NAME} - Official Ubuntu country archive|${alias}")
-                ok "Using Ubuntu's official country archive for ${GEO_COUNTRY_NAME}."
-            else
-                info "No usable official Ubuntu country archive exists for ${GEO_COUNTRY_NAME}."
-            fi
+    # 2) Always expose the official country mirror as a distinct choice.
+    # It is intentionally shown even if the alias was not discovered/validated;
+    # the user can choose it and the normal APT validation will decide whether
+    # it is usable.
+    if [[ "$OS_ID" == "debian" ]]; then
+        if alias="$(debian_country_alias "$GEO_COUNTRY_CODE" 2>/dev/null)"; then
+            country_lines+=("${GEO_COUNTRY_NAME} - Official country mirror|${alias}")
         fi
-
-        # 3) If no official local mirror exists, show the curated fallback list
-        # and Ubuntu's official primary archive.
-        if ((${#country_lines[@]} == 0)); then
-            country_lines+=(
-                "Liara|https://linux-mirror.liara.ir/repository/ubuntu"
-                "ParsPack|https://ubuntu.parspack.com/ubuntu"
-                "Runflare|http://mirror-linux.runflare.com/ubuntu"
-                "Ubuntu official primary archive|https://archive.ubuntu.com/ubuntu"
-            )
-            warn "No usable official local Ubuntu mirror was found for ${GEO_COUNTRY_NAME}."
-            info "Showing curated fallback mirrors and Ubuntu's official primary archive."
+    else
+        if alias="$(ubuntu_country_alias "$GEO_COUNTRY_CODE" 2>/dev/null)"; then
+            country_lines+=("${GEO_COUNTRY_NAME} - Official country archive|${alias}")
         fi
     fi
 
+    # 3) Iran keeps the requested curated mirrors as fallback candidates, but
+    # they are no longer a special-case replacement for the country's own
+    # official mirrors.
+    if [[ "$GEO_COUNTRY_CODE" == "IR" ]]; then
+        if [[ "$OS_ID" == "debian" ]]; then
+            country_lines+=(
+                "Iran - Liara|https://linux-mirror.liara.ir/repository/debian"
+                "Iran - ParsPack|https://debian.parspack.com/debian"
+                "Iran - Runflare|http://mirror-linux.runflare.com/debian"
+            )
+        else
+            country_lines+=(
+                "Iran - Liara|https://linux-mirror.liara.ir/repository/ubuntu"
+                "Iran - ParsPack|https://ubuntu.parspack.com/ubuntu"
+                "Iran - Runflare|http://mirror-linux.runflare.com/ubuntu"
+            )
+        fi
+    fi
+
+    # 4) Always expose the official primary archive/CDN as a distinct choice.
+    if [[ "$OS_ID" == "debian" ]]; then
+        country_lines+=("Debian official primary CDN|https://deb.debian.org/debian")
+    else
+        country_lines+=("Ubuntu official primary archive|https://archive.ubuntu.com/ubuntu")
+    fi
+
+    # Deduplicate by URL while preserving order.
     for line in "${country_lines[@]}"; do
         host="${line#*|}"
         [[ -n "$host" ]] || continue
-        local duplicate=0
+        duplicate=0
         for item in "${_arr[@]}"; do
             existing="${item#*|}"
             if [[ "${existing%/}" == "${host%/}" ]]; then
@@ -558,7 +533,11 @@ add_country_mirrors() {
         ((duplicate == 0)) && _arr+=("$line")
     done
 
-    ok "Added ${#country_lines[@]} ${OS_ID^} mirror candidate(s) for ${GEO_COUNTRY_NAME}."
+    if ((${#country_lines[@]} > 0)); then
+        ok "Added ${#country_lines[@]} ${OS_ID^} mirror candidate(s) for ${GEO_COUNTRY_NAME}."
+    else
+        warn "No mirror candidates could be built for ${GEO_COUNTRY_NAME}."
+    fi
 }
 
 # ---------- Mirrors ----------
@@ -909,10 +888,10 @@ configure_mirror() {
 # ---------- DNS ----------
 # Configure primary and secondary DNS providers independently.
 configure_dns() {
-    local DNS1="" DNS2="" dns_choice=""
+    local DNS1="" DNS2="" DEFAULT_DNS1="" DEFAULT_DNS2=""
 
     valid_ipv4() {
-        local ip=$1 octet
+        local ip="$1" octet
         [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
         IFS=. read -r -a octets <<< "$ip"
         for octet in "${octets[@]}"; do
@@ -920,62 +899,115 @@ configure_dns() {
         done
     }
 
+    # Get the first two DNS servers currently configured on the system.
+    get_current_dns_pair() {
+        local -a found=() x
+        local value
+        if command -v resolvectl >/dev/null 2>&1; then
+            while read -r x; do
+                valid_ipv4 "$x" && found+=("$x")
+            done < <(resolvectl dns 2>/dev/null | awk '{for(i=2;i<=NF;i++) print $i}' | sort -u)
+        fi
+        if ((${#found[@]} == 0)); then
+            while read -r value; do
+                valid_ipv4 "$value" && found+=("$value")
+            done < <(awk '/^[[:space:]]*nameserver[[:space:]]+/{print $2}' /etc/resolv.conf 2>/dev/null)
+        fi
+        DEFAULT_DNS1="${found[0]:-}"
+        DEFAULT_DNS2="${found[1]:-${found[0]:-}}"
+    }
+
     choose_dns() {
-        local role="$1" choice="" value=""
+        local role="$1" default_ip="$2" choice="" value=""
         while true; do
             echo
             echo "  ${role} DNS"
-            echo "    1) Cloudflare       1.1.1.1"
-            echo "    2) Google           8.8.8.8"
-            echo "    3) Quad9            9.9.9.9"
-            echo "    4) AdGuard          94.140.14.14"
-            echo "    5) Cloudflare       1.0.0.1"
-            echo "    6) Google           8.8.4.4"
-            echo "    7) Quad9            149.112.112.112"
-            echo "    8) AdGuard          94.140.15.15"
-            echo "    9) Custom IPv4"
+            if [[ -n "$default_ip" ]]; then
+                echo "    1) Current/default DNS     $default_ip"
+                echo "    2) Cloudflare              $([[ "$role" == "Primary" ]] && echo 1.1.1.1 || echo 1.0.0.1)"
+                echo "    3) Google                  $([[ "$role" == "Primary" ]] && echo 8.8.8.8 || echo 8.8.4.4)"
+                echo "    4) Quad9                   $([[ "$role" == "Primary" ]] && echo 9.9.9.9 || echo 149.112.112.112)"
+                echo "    5) AdGuard                 $([[ "$role" == "Primary" ]] && echo 94.140.14.14 || echo 94.140.15.15)"
+                echo "    6) Custom IPv4"
+            else
+                echo "    1) Cloudflare              $([[ "$role" == "Primary" ]] && echo 1.1.1.1 || echo 1.0.0.1)"
+                echo "    2) Google                  $([[ "$role" == "Primary" ]] && echo 8.8.8.8 || echo 8.8.4.4)"
+                echo "    3) Quad9                   $([[ "$role" == "Primary" ]] && echo 9.9.9.9 || echo 149.112.112.112)"
+                echo "    4) AdGuard                 $([[ "$role" == "Primary" ]] && echo 94.140.14.14 || echo 94.140.15.15)"
+                echo "    5) Custom IPv4"
+            fi
             echo "    S) Skip this stage"
             read -r -p "  Choice: " choice
 
-            case "$choice" in
-                1) value="1.1.1.1";;
-                2) value="8.8.8.8";;
-                3) value="9.9.9.9";;
-                4) value="94.140.14.14";;
-                5) value="1.0.0.1";;
-                6) value="8.8.4.4";;
-                7) value="149.112.112.112";;
-                8) value="94.140.15.15";;
-                9)
-                    while true; do
-                        read -r -p "  ${role} DNS IPv4 (S=skip): " value
-                        if is_skip "$value"; then return 10; fi
-                        if valid_ipv4 "$value"; then break; fi
-                        warn "Invalid IPv4 address. Try again."
-                    done
-                    ;;
-                [Ss]|[Ss][Kk][Ii][Pp]) return 10;;
-                *) warn "Invalid choice. Enter 1-9 or S."; continue;;
-            esac
-            printf '%s' "$value"
+            if [[ -n "$default_ip" ]]; then
+                case "$choice" in
+                    1) value="$default_ip";;
+                    2) [[ "$role" == "Primary" ]] && value="1.1.1.1" || value="1.0.0.1";;
+                    3) [[ "$role" == "Primary" ]] && value="8.8.8.8" || value="8.8.4.4";;
+                    4) [[ "$role" == "Primary" ]] && value="9.9.9.9" || value="149.112.112.112";;
+                    5) [[ "$role" == "Primary" ]] && value="94.140.14.14" || value="94.140.15.15";;
+                    6)
+                        while true; do
+                            read -r -p "  ${role} DNS IPv4 (S=skip): " value
+                            if is_skip "$value"; then return 10; fi
+                            if valid_ipv4 "$value"; then break; fi
+                            warn "Invalid IPv4 address. Try again."
+                        done
+                        ;;
+                    [Ss]|[Ss][Kk][Ii][Pp]) return 10;;
+                    *) warn "Invalid choice. Enter 1-6 or S."; continue;;
+                esac
+            else
+                case "$choice" in
+                    1) [[ "$role" == "Primary" ]] && value="1.1.1.1" || value="1.0.0.1";;
+                    2) [[ "$role" == "Primary" ]] && value="8.8.8.8" || value="8.8.4.4";;
+                    3) [[ "$role" == "Primary" ]] && value="9.9.9.9" || value="149.112.112.112";;
+                    4) [[ "$role" == "Primary" ]] && value="94.140.14.14" || value="94.140.15.15";;
+                    5)
+                        while true; do
+                            read -r -p "  ${role} DNS IPv4 (S=skip): " value
+                            if is_skip "$value"; then return 10; fi
+                            if valid_ipv4 "$value"; then break; fi
+                            warn "Invalid IPv4 address. Try again."
+                        done
+                        ;;
+                    [Ss]|[Ss][Kk][Ii][Pp]) return 10;;
+                    *) warn "Invalid choice. Enter 1-5 or S."; continue;;
+                esac
+            fi
+            SELECTED_DNS="$value"
             return 0
         done
     }
 
     echo -e "\n${CYAN}🧭 DNS configuration${NC}"
     get_dns
+    get_current_dns_pair
     echo "Current DNS: $DNS_SERVERS"
     echo "Primary and secondary DNS are selected independently."
 
-    local primary_result secondary_result
-    primary_result="$(choose_dns "Primary")"
-    if [[ $? -eq 10 ]]; then info "Skipping DNS configuration."; return; fi
-    DNS1="$primary_result"
+    choose_dns "Primary" "$DEFAULT_DNS1"
+    local dns_status=$?
+    if ((dns_status == 10)); then
+        info "Skipping DNS configuration."
+        return
+    elif ((dns_status != 0)); then
+        warn "DNS selection failed."
+        return
+    fi
+    DNS1="$SELECTED_DNS"
 
     while true; do
-        secondary_result="$(choose_dns "Secondary")"
-        if [[ $? -eq 10 ]]; then info "Skipping DNS configuration."; return; fi
-        DNS2="$secondary_result"
+        choose_dns "Secondary" "$DEFAULT_DNS2"
+        dns_status=$?
+        if ((dns_status == 10)); then
+            info "Skipping DNS configuration."
+            return
+        elif ((dns_status != 0)); then
+            warn "DNS selection failed."
+            return
+        fi
+        DNS2="$SELECTED_DNS"
         if [[ "$DNS1" == "$DNS2" ]]; then
             warn "Secondary DNS must be different from Primary DNS."
             continue
