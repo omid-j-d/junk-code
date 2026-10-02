@@ -302,16 +302,49 @@ configure_swap() {
 # add country-local mirror candidates; mirror selection still depends on the
 # real IPv4 throughput benchmark.
 detect_public_country() {
-    local public_ip geo_json
+    local public_ip="" response code name
     GEO_COUNTRY_CODE=""
     GEO_COUNTRY_NAME=""
-    public_ip="$(curl4 -fsSL --max-time 6 https://api.ipify.org 2>/dev/null | tr -d '\r\n' || true)"
+
+    # IPv4-only public address discovery. Try more than one endpoint so a
+    # single blocked/rate-limited service cannot break dynamic mirror discovery.
+    for endpoint in \
+        "https://api.ipify.org" \
+        "https://ipv4.icanhazip.com" \
+        "https://ifconfig.me/ip"; do
+        public_ip="$(curl4 -fsSL --max-time 6 "$endpoint" 2>/dev/null | tr -d '[:space:]' || true)"
+        if [[ "$public_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            break
+        fi
+        public_ip=""
+    done
     [[ -n "$public_ip" ]] || return 1
 
-    geo_json="$(curl4 -fsSL --max-time 8 "https://ipwho.is/$public_ip" 2>/dev/null || true)"
-    GEO_COUNTRY_CODE="$(printf '%s' "$geo_json" | sed -n 's/.*"country_code"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | head -n1 | tr '[:lower:]' '[:upper:]')"
-    GEO_COUNTRY_NAME="$(printf '%s' "$geo_json" | sed -n 's/.*"country"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
-    [[ -n "$GEO_COUNTRY_CODE" && -n "$GEO_COUNTRY_NAME" ]]
+    # API 1: ipapi.co — plain country endpoint, no JSON parser required.
+    code="$(curl4 -fsSL --max-time 7 "https://ipapi.co/$public_ip/country/" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "$code" =~ ^[A-Za-z]{2}$ ]]; then
+        GEO_COUNTRY_CODE="${code^^}"
+        name="$(curl4 -fsSL --max-time 7 "https://ipapi.co/$public_ip/country_name/" 2>/dev/null | tr -d '\r' | sed 's/[[:space:]]*$//' || true)"
+        GEO_COUNTRY_NAME="$name"
+    fi
+
+    # API 2: ipwho.is — useful fallback when ipapi is blocked/rate-limited.
+    if [[ -z "$GEO_COUNTRY_CODE" ]]; then
+        response="$(curl4 -fsSL --max-time 8 "https://ipwho.is/$public_ip" 2>/dev/null || true)"
+        GEO_COUNTRY_CODE="$(printf '%s' "$response" | sed -n 's/.*"country_code"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | head -n1 | tr '[:lower:]' '[:upper:]')"
+        GEO_COUNTRY_NAME="$(printf '%s' "$response" | sed -n 's/.*"country"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    fi
+
+    # API 3: ipinfo.io — tokenless lookup as a final fallback.
+    if [[ -z "$GEO_COUNTRY_CODE" ]]; then
+        response="$(curl4 -fsSL --max-time 8 "https://ipinfo.io/$public_ip/json" 2>/dev/null || true)"
+        GEO_COUNTRY_CODE="$(printf '%s' "$response" | sed -n 's/.*"country"[[:space:]]*:[[:space:]]*"\([A-Za-z][A-Za-z]\)".*/\1/p' | head -n1 | tr '[:lower:]' '[:upper:]')"
+        GEO_COUNTRY_NAME="$(printf '%s' "$response" | sed -n 's/.*"country_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
+    fi
+
+    [[ "$GEO_COUNTRY_CODE" =~ ^[A-Z]{2}$ ]] || return 1
+    [[ -n "$GEO_COUNTRY_NAME" ]] || GEO_COUNTRY_NAME="$GEO_COUNTRY_CODE"
+    return 0
 }
 
 # Debian publishes the authoritative complete mirror list. Extract the
@@ -769,16 +802,18 @@ configure_time() {
         # requests from VPS/datacenter addresses.
         public_ip="$(curl4 -fsSL --max-time 5 https://api.ipify.org 2>/dev/null | tr -d '\r\n' || true)"
 
-        # 1) ipapi.co
-        detected_tz="$(curl4 -fsSL --max-time 7 https://ipapi.co/timezone/ 2>/dev/null | tr -d '\r\n' || true)"
-        [[ "$detected_tz" == "Undefined" || "$detected_tz" == "null" ]] && detected_tz=""
+        # 1) ipapi.co — the /timezone endpoint returns an IANA timezone as plain text.
+        if [[ -n "$public_ip" ]]; then
+            detected_tz="$(curl4 -fsSL --max-time 7 "https://ipapi.co/$public_ip/timezone/" 2>/dev/null | tr -d '\r\n' || true)"
+            [[ "$detected_tz" == "Undefined" || "$detected_tz" == "null" ]] && detected_tz=""
+        fi
 
-        # 2) ipwho.is (JSON response)
+        # 2) ipwho.is (JSON response).
         if [[ -z "$detected_tz" && -n "$public_ip" ]]; then
             detected_tz="$(curl4 -fsSL --max-time 7 "https://ipwho.is/$public_ip" 2>/dev/null | sed -n 's/.*"timezone"[[:space:]]*:[[:space:]]*{[^}]*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true)"
         fi
 
-        # 3) ipinfo.io (tokenless endpoint; may be unavailable in some regions)
+        # 3) ipinfo.io (tokenless endpoint; may be unavailable in some regions).
         if [[ -z "$detected_tz" && -n "$public_ip" ]]; then
             detected_tz="$(curl4 -fsSL --max-time 7 "https://ipinfo.io/$public_ip/json" 2>/dev/null | sed -n 's/.*"timezone"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1 || true)"
         fi
